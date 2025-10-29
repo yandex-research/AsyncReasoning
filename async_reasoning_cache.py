@@ -55,6 +55,10 @@ class AsyncReasoningCache:
         prefill_cache_block(self.prompting.thinker_output_prefix,
             [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output])
 
+        # Prefill thinker_question
+        prefill_cache_block(self.prompting.thinker_control_question,
+            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output, self.thinker_question])
+
         # prepare cache manager for each mode: only thinker and thinker+writer in parallel - it is needed to generate in each mode
         self.cm_thinker_only = shared_cache.SharedCacheManager(
             cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output]],

@@ -90,8 +90,8 @@ class CacheBlock(transformers.cache_utils.DynamicCache):
         """
         if keep_first < 0:
             raise ValueError(f"keep_first must be >= 0, got {keep_first}")
-        # if self._seen_tokens < keep_first:
-        #     raise ValueError(f"keep_first must be <= _seen_tokens = {self._seen_tokens}, got {keep_first}")
+        if self._seen_tokens < keep_first:
+            raise ValueError(f"keep_first must be <= _seen_tokens = {self._seen_tokens}, got {keep_first}")
 
         for layer_idx in range(len(self.key_cache)):
             k = self.key_cache[layer_idx]
