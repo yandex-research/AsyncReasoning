@@ -82,6 +82,26 @@ class CacheBlock(transformers.cache_utils.DynamicCache):
             self.first_available_positions_by_layer[layer_idx] += other_position_span_size
         if not keep_other:
             other.clear()
+    
+    def trim_keep_first(self, keep_first: int) -> None:
+        """
+        Keep only the first `keep_first` tokens in each layer's KV cache.
+        Truncates tensors in-place and updates bookkeeping fields.
+        """
+        if keep_first < 0:
+            raise ValueError(f"keep_first must be >= 0, got {keep_first}")
+        if self._seen_tokens < keep_first:
+            raise ValueError(f"keep_first must be <= _seen_tokens = {self._seen_tokens}, got {keep_first}")
+
+        for layer_idx in range(len(self.key_cache)):
+            k = self.key_cache[layer_idx]
+            v = self.value_cache[layer_idx]
+
+            self.key_cache[layer_idx] = k[..., :keep_first, :].contiguous()
+            self.value_cache[layer_idx] = v[..., :keep_first, :].contiguous()
+            self.first_available_positions_by_layer[layer_idx] = keep_first
+
+        self._seen_tokens = min(self._seen_tokens, keep_first)
 
 
 _ROTARY_CACHE: Optional[Dict[Any, Tuple[torch.Tensor, torch.Tensor]]] = None
@@ -390,8 +410,56 @@ def test_copy_from(model_names=("meta-llama/Llama-3.2-3B", "Qwen/Qwen2.5-3B"), a
         assert torch.allclose(k_both, torch.cat([k1, k2, k3], dim=-2), atol=atol)
         assert torch.allclose(v_both, torch.cat([v1, v2, v3], dim=-2), atol=atol)
 
+def test_trim_keep_first(model_names=("meta-llama/Llama-3.2-3B", "Qwen/Qwen2.5-3B"), atol: float = 1e-4):
+    for model_name in model_names:
+        model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
+        config, rotary_emb = model.config, model.model.rotary_emb
+
+        cache_block = CacheBlock(config=config)
+
+        def _append(cache_block, key_states, value_states, cache_position):
+            cos, sin = rotary_emb(
+                key_states, cache_position.view(1, -1).tile(key_states.shape[-2])
+            )
+            cache_block.append(
+                layer_idx=0,
+                key_states=key_states,
+                value_states=value_states,
+                cache_kwargs=dict(cos=cos, sin=sin, cache_position=cache_position),
+            )
+
+        # append 5 tokens
+        k = torch.randn(1, 8, 5, 128)
+        v = torch.randn(1, 8, 5, 128)
+        pos = torch.tensor([0, 1, 2, 3, 4])
+        _append(cache_block, k, v, pos)
+
+        # trim to first 3 tokens
+        cache_block.trim_keep_first(3)
+        k_trimmed, v_trimmed = cache_block.get_kv_with_offset(layer_idx=0, offset=0)
+
+        assert k_trimmed.shape[-2] == 3
+        assert v_trimmed.shape[-2] == 3
+        assert torch.allclose(k[..., :3, :], k_trimmed, atol=atol)
+        assert torch.allclose(v[..., :3, :], v_trimmed, atol=atol)
+
+        # trim to larger number than available (no-op)
+        cache_block.trim_keep_first(10)
+        k2, v2 = cache_block.get_kv_with_offset(layer_idx=0, offset=0)
+        assert k2.shape[-2] == 3
+        assert v2.shape[-2] == 3
+        assert torch.allclose(k_trimmed, k2, atol=atol)
+
+        # trim to zero (empty)
+        cache_block.trim_keep_first(0)
+        k_empty, v_empty = cache_block.key_cache[0], cache_block.value_cache[0]
+        assert k_empty.shape[-2] == 0
+        assert v_empty.shape[-2] == 0
+        assert cache_block.first_available_positions_by_layer[0] == 0
+
 
 if __name__ == '__main__':
     test_rotate_by_offset()
     test_cache_block()
     test_copy_from()
+    test_trim_keep_first()
