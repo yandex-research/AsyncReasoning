@@ -9,15 +9,15 @@ wandb>=0.17.2
 tqdm
 
 # For eval
-latex2mathml
+latex2mathml==3.78.1
 
 # For tortoise-tts TODO: Versions
-deepspeed
-unidecode
-inflect
-librosa
+deepspeed>=0.18.2
+unidecode>=1.4.0
+inflect>=7.5.0
+librosa>=0.11.0
 rotary_embedding_torch
-einops
-progressbar
-torchaudio
-setuptools
+einops>=0.8.1
+progressbar>=2.5
+torchaudio==2.9.0
+setuptools>=80.9.0
