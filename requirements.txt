@@ -20,3 +20,4 @@ rotary_embedding_torch
 einops
 progressbar
 torchaudio
+setuptools
