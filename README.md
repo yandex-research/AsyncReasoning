@@ -9,8 +9,7 @@
 npm init -y
 npm install speech-rule-engine
 ```
-3. Run `demo_with_step_timestamps.ipynb` (same demo with small modifications) that will store some timestamps of token generations
-4. Run `./step_eval.ipynb`
+3. Rune `eval_all_in_one.ipynb`
 
 Please make sure that it works for you!
 
