@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchaudio
@@ -8,7 +7,10 @@ from tortoise.api import TextToSpeech
 from tortoise.utils.text import split_and_recombine_text
 from tortoise.utils.audio import load_audio, load_voice, load_voices
 
+from typing import Sequence
+
 import re
+import time
 import latex2mathml.converter
 import subprocess
 
@@ -100,7 +102,7 @@ class TTSEvaluator:
             current_tokens.clear()
             current_times.clear()
 
-        for token_id, tok, t in token_times:
+        for tok, t in token_times:
             stripped = tok.lstrip()  # remove leading spaces for detection
 
             if not inside_math:
@@ -126,96 +128,31 @@ class TTSEvaluator:
 
         flush()
         return chunks
-
+    
     @staticmethod
-    def analyze_speech_timing(gen_times, spk_times, show=True, measure_in="chunks", chunk_sizes=None):
-        assert len(gen_times) == len(spk_times), f"{len(gen_times)}, {len(spk_times)}"
-        assert not (measure_in == "tokens" and chunk_sizes is None), "Provide chunk sizes to plot tokens"
+    def compute_delays(chunk_done_relative_timestamps: Sequence[float],
+                        chunk_audio_durations: Sequence[float]) -> float:
+        """
+        :param chunk_done_relative_timestamps: for each generated speech chunk,
+            this is how long (time) passed between user request and when this chunk
+            was ready to be voiced (including llm, tts, etc).
+        :param chunk_audio_durations: the audio length of this individual chunk
+            (not cumulative, not accounting for LLM / TTS - just the audio alone)
+        :returns: user-perceived delay before each chunk
 
+        :example:
+        >>> compute_delay([1, 3, 8], [5, 1, 3])  # [1.0, 0, 1.0]
+        """
+        assert len(chunk_done_relative_timestamps) == len(chunk_audio_durations)
         delays = []
-        ideal_starts = []
-        actual_starts = []
-        shift = 0.0
-        total_delay = 0.0
-        total_gen_time = gen_times[-1]
-
-        for i, (t_gen, t_speak) in enumerate(zip(gen_times, spk_times)):
-            ideal_start = sum(spk_times[:i]) + shift
-            ideal_starts.append(ideal_start)
-            actual_starts.append(t_gen)
-            if t_gen > ideal_start:
-                delay = t_gen - ideal_start
-                delays.append(delay)
-                shift += delay
-                total_delay += delay
-            else:
-                delays.append(0.0)
-
-        delays = np.array(delays)
-        speech_no_delay = np.sum(spk_times)
-        speech_with_delay = speech_no_delay + total_delay
-
-        metrics = {
-            "total_delay": float(total_delay),
-            "speech_no_delay": float(speech_no_delay),
-            "speech_with_delay": float(speech_with_delay),
-            "avg_delay": float(np.mean(delays)),
-            "max_delay": float(np.max(delays)),
-            "num_delayed_chunks": int(np.sum(delays > 0)),
-            "total_num_chunks": int(len(delays)),
-        }
-
-        if show:
-            if measure_in == "chunks":
-                x = np.arange(len(gen_times))
-
-            elif measure_in == "tokens":
-                token_positions = np.cumsum([0] + chunk_sizes[:-1])  # start index of each chunk
-                total_tokens = sum(chunk_sizes)
-                x = token_positions
-            else:
-                raise ValueError(f"measure_in should be in ['chunks', 'tokens']")
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={"width_ratios": [2, 1]})
-
-            # Left: timeline comparison
-            ax1.plot(x, ideal_starts, label="ideal start", color="green")
-            ax1.plot(x, actual_starts, label="actual start", color="blue")
-            ax1.fill_between(
-                x, ideal_starts, actual_starts,
-                where=(np.array(actual_starts) > np.array(ideal_starts)),
-                color="red", alpha=0.3, label="delay region"
-            )
-            sc = ax1.scatter(
-                x, np.array(actual_starts),
-                c=delays, cmap="Reds", s=30, label="delay magnitude"
-            )
-
-            # Plot speech progression (no delay vs with delay)
-            cumulative_no_delay = np.cumsum(spk_times)
-            cumulative_with_delay = cumulative_no_delay + np.cumsum(delays)
-
-            ax1.plot(x, cumulative_no_delay, linestyle="--", color="orange", label="speech (no delay)")
-            ax1.plot(x, total_gen_time + cumulative_no_delay, linestyle="--", color="orange")
-            ax1.plot(x, cumulative_with_delay, linestyle=":", color="black", label="speech (with delay)")
-
-            fig.colorbar(sc, ax=ax1, label="Delay (s)")
-            ax1.set_xlabel(f"{measure_in} index")
-            ax1.set_ylabel("Time (s)")
-            ax1.set_title("Speech Generation Timing Analysis")
-            ax1.legend()
-
-            # Right: histogram
-            nonzero_delays = delays[delays > 0]
-            ax2.hist(nonzero_delays, bins=20, color="red", alpha=0.6, edgecolor="black")
-            ax2.set_xlabel("Delay duration (s)")
-            ax2.set_ylabel("Count")
-            ax2.set_title("Delay Duration Distribution")
-
-            plt.tight_layout()
-            plt.show()
-
-        return metrics
+        earliest_next_chunk_start = 0.0
+        for chunk_done_by, chunk_audio_duration in zip(
+            chunk_done_relative_timestamps, chunk_audio_durations):
+            real_chunk_start = max(earliest_next_chunk_start, chunk_done_by)
+            # ^-- when the user actually starts hearing this audio, with all delays
+            delays.append(real_chunk_start - earliest_next_chunk_start)
+            earliest_next_chunk_start = real_chunk_start + chunk_audio_duration
+        return delays
     
     def get_audio_track(self, text):
         # !!! Sometimes this code fails due to matrix dim mismatch (that is something wrong with tortois-tts). Just rerun cell.
@@ -225,6 +162,8 @@ class TTSEvaluator:
             try:
                 frames_srate = []
                 spk_times = []
+                tts_times = []
+                t0 = time.perf_counter()
                 for sample_rate, frame in self.inference(
                     text=text,
                     script=None,
@@ -233,30 +172,68 @@ class TTSEvaluator:
                     seed=42,
                     split_by_newline="Yes",
                 ):
+                    t1 = time.perf_counter()
                     spk_times.append(len(frame) / sample_rate)
+                    tts_times.append(t1 - t0)
                     frames_srate.append((frame, sample_rate))
+                    t0 = time.perf_counter()
                 flag = False
             except RuntimeError as RE:
                 logger.debug(f"Caught RuntimeError: {RuntimeError}")
                 print(f"Caught RuntimeError: {RuntimeError}")
 
         total_frame = np.concatenate([el[0] for el in frames_srate], axis=0)
-        return total_frame, frames_srate[0][1], spk_times
+        return total_frame, frames_srate[0][1], spk_times, tts_times
 
-    def __call__(self, token_times, k_cunks=5, show=False, measure_in="tokens"):
+    def __call__(self, token_times, k_chunks=5, add_tts="Independant", return_chunks=False, return_audio=False):
         """
         Here will be better doc string
         token_times: List[(token_id, decoded_str, generated_timestamp)]
                         ^-- eos included
-        """
-        chunked_token_times = self.chunk_tokens_with_latex(token_times[:-1], k=k_cunks)
+        """ 
+        chunked_token_times = self.chunk_tokens_with_latex(token_times[:-1], k=k_chunks)
+        
 
         texts = [el["text"] for el in chunked_token_times]
         gen_times = [el["times"][-1] for el in chunked_token_times]
 
-        text = self.convert_markdown_with_latex("\n".join(texts))
-        total_frame, frame_rate, spk_times = self.get_audio_track(text)
-
         chunk_sizes = [len(el["times"]) for el in chunked_token_times]
-        metrics = self.analyze_speech_timing(gen_times, spk_times, show=show, measure_in=measure_in, chunk_sizes=chunk_sizes)
-        return metrics, (gen_times, spk_times, chunk_sizes), (total_frame, frame_rate)
+
+        text = self.convert_markdown_with_latex("\n".join(texts))
+        total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(text)
+
+        assert len(gen_times) == len(spk_times), f"{len(gen_times)}, {len(spk_times)}"
+        if add_tts == "Independant":
+            chunk_ready = np.array(gen_times) + np.array(tts_times)
+        elif add_tts == "Cummulitive":
+            chunk_ready = np.array(gen_times) + np.cumsum(tts_times)
+        elif add_tts == "No":
+            chunk_ready = np.array(gen_times)
+        else:
+            raise ValueError("Unexpected add_tts mode!")
+
+        delays = self.compute_delays(chunk_ready, spk_times)
+
+        metrics = {
+            "total_delay": float(np.sum(delays)),
+            "delays": delays,
+            "duration_no_delay": float(np.sum(spk_times)),
+            "duration_with_delay": float(np.sum(spk_times) + float(np.sum(delays))),
+        }
+        output = [metrics]
+        if return_chunks:
+            output.append({
+                "text_chunks": texts,
+                "chunk_sizes": chunk_sizes,
+                "gen_timestamps_chunks": gen_times,
+                "tts_times_chunks": tts_times,
+                "spk_times_chunks": spk_times, 
+                }
+            )
+        if return_audio:
+            output.append({
+                "frame": total_frame,
+                "frame_rate": frame_rate,
+                }
+            )
+        return output
