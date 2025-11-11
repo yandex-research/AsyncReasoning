@@ -41,4 +41,5 @@ Solve the following problem:
         self.thinker_output_prefix =  f"""<|im_end|>\n<|im_start|>assistant\n<think>\nI am in Thinker mode. My text is not visible to the user. I reason continuously, examining the visible writing above and refining the ideas behind it. I detect errors, test assumptions, and plan improvements. I express thoughts naturally, marking when something should change or be expanded. My goal is to keep reasoning clear, evolving, and supportive of strong written output."""
 
         # these questions are inserted to change mode depending on model answers
-        self.thinker_control_question = "\n\nSYSTEM: Given my current progress, is there enough information to continue writing the response to the user? (yes/no):"
+        self.thinker_control_question = "\n\nSYSTEM: Given my current progress, is there enough information to continue writing the response to the user? (yes/no): "
+        self.yes_token, self.no_token = "yes", "no"
