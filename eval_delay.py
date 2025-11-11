@@ -76,8 +76,6 @@ class TTSEvaluator:
         Group tokens into chunks of size `k` while ensuring that entire LaTeX math
         expressions (delimited by `$...$` or `$$...$$`) remain in the same chunk.
 
-        WHEN INCOMING PIECES ARE NOT SINGLE TOKENS THIS NEEDS TO BE CHANGED!!!!!
-
         Each chunk contains:
         - `text`: concatenated string of tokens in that chunk
         - `times`: list of corresponding token generation timestamps
