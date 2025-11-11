@@ -121,8 +121,8 @@ class TTSEvaluator:
         while i < total_tokens:
             tok, t = token_times[i]
             # We live in assumption that if tok contains $ then tok.strip() either "$" or "$$"
-            # TODO: WHEN INCOMING PIECES ARE NOT SINGLE TOKENS THIS NEEDS TO BE CHANGED!!!!!
             stripped = tok.strip()
+            assert (not "$" in stripped) or (stripped in ["$", "$$"])
             
             current_tokens.append(tok)
             current_times.append(t)
