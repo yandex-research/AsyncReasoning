@@ -1,19 +1,20 @@
-# AsyncReasoning
+# Tortoise-tts readme
+---
+title: Tortoise Tts
+emoji: 🐢
+colorFrom: gray
+colorTo: gray
+sdk: gradio
+sdk_version: 4.36.1
+app_file: app.py
+pinned: false
+license: apache-2.0
+short_description: 'ExpressivText-to-Speech '
+---
 
+Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
 
-## How to run eval demo:
-(The idea is to unify requirements for both hogwild and tts)
-1. Update env with newer `./requirements.txt`
-2. Install speech-rule-engine (node package) current directory (`.`):
-```
-npm init -y
-npm install speech-rule-engine
-```
-3. Rune `demo_eval.ipynb`
-
-Please make sure that it works for you!
-
-## The contents of the `./tortoise` Folder
+## The contents of this `./tortoise` Folder
 
 The code contained in the `./tortoise` directory is **not authored by this project’s maintainers**. It is a replica of the open-source [[Tortoise TTS](https://github.com/neonbjb/tortoise-tts)](https://github.com/neonbjb/tortoise-tts) project by **neonbjb**, which is licensed under the [[Apache License 2.0](https://github.com/neonbjb/tortoise-tts/blob/main/LICENSE)](https://github.com/neonbjb/tortoise-tts/blob/main/LICENSE). See [(Betker et al, 2023)](https://arxiv.org/abs/2305.07243) for their technical report.
 
