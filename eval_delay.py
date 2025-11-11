@@ -7,7 +7,7 @@ from tortoise.api import TextToSpeech
 from tortoise.utils.text import split_and_recombine_text
 from tortoise.utils.audio import load_audio, load_voice, load_voices
 
-from typing import Sequence
+from typing import Sequence, Tuple, Union
 
 import re
 import time
@@ -23,7 +23,7 @@ class TTSEvaluator:
     def __init__(self):
         self.tts = TextToSpeech(kv_cache=True, use_deepspeed=True, half=True)
 
-    def inference(
+    def _inference(
         self,
         text,
         script,
@@ -59,7 +59,8 @@ class TTSEvaluator:
                 voice_samples=voice_samples,
                 conditioning_latents=conditioning_latents,
                 preset="ultra_fast",
-                k=1
+                k=1,
+                verbose=False
             ):
                 total_audio_frame.append(audio_frame.cpu().detach().numpy())
             yield (24000, np.concatenate(total_audio_frame, axis=0))
@@ -186,7 +187,7 @@ class TTSEvaluator:
                 spk_times = []
                 tts_times = []
                 t0 = time.perf_counter()
-                for sample_rate, frame in self.inference(
+                for sample_rate, frame in self._inference(
                     text=text,
                     script=None,
                     voice="freeman",
@@ -201,39 +202,49 @@ class TTSEvaluator:
                     t0 = time.perf_counter()
                 flag = False
             except RuntimeError as RE:
-                logger.debug(f"Caught RuntimeError: {RuntimeError}")
-                print(f"Caught RuntimeError: {RuntimeError}")
+                logger.debug(f"Caught RuntimeError: {RE}")
 
         total_frame = np.concatenate([el[0] for el in frames_srate], axis=0)
         return total_frame, frames_srate[0][1], spk_times, tts_times
 
-    def __call__(self, token_times, k_chunks=5, add_tts="Independant", return_chunks=False, return_audio=False):
+    def __call__(self,
+        token_times: Sequence[Tuple[str, float]],
+        k_chunks: int = 5,
+        add_tts_in_parrallel: bool = True,
+        return_chunks: bool = False,
+        return_audio: bool = False,
+        mock_spk_times: Union[None, Sequence[float]] = None,
+        mock_tts_times: Union[None, Sequence[float]] = None,
+    ):
         """
         Here will be better doc string
-        token_times: List[(token_id, decoded_str, generated_timestamp)]
+        token_times: Sequence[(decoded_str, generated_timestamp)]
                         ^-- eos included
         """ 
-        chunked_token_times = self.chunk_tokens_with_latex(token_times[:-1], k=k_chunks)
-        
 
+        # Chunking with latex
+        chunked_token_times = self.chunk_tokens_with_latex(token_times[:-1], k=k_chunks)
         texts = [el["text"] for el in chunked_token_times]
         gen_times = [el["times"][-1] for el in chunked_token_times]
-
         chunk_sizes = [len(el["times"]) for el in chunked_token_times]
 
-        text = self.convert_markdown_with_latex("\n".join(texts))
-        total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(text)
+        # Calling tts or use mock values
+        assert not ((mock_spk_times is None) ^ (mock_tts_times is None)), "You must use either both or neither: mock_spk_times, mock_tts_times"
+        if mock_spk_times is None:
+            text = self.convert_markdown_with_latex("\n".join(texts))
+            total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(text)
+        else:
+            assert not return_audio, "Cannot return audio with mock tts times"
+            spk_times, tts_times = mock_spk_times, mock_tts_times
 
         assert len(gen_times) == len(spk_times), f"{len(gen_times)}, {len(spk_times)}"
-        if add_tts == "Independant":
-            chunk_ready = np.array(gen_times) + np.array(tts_times)
-        elif add_tts == "Cummulitive":
-            chunk_ready = np.array(gen_times) + np.cumsum(tts_times)
-        elif add_tts == "No":
-            chunk_ready = np.array(gen_times)
-        else:
-            raise ValueError("Unexpected add_tts mode!")
+        assert len(gen_times) == len(tts_times), f"{len(gen_times)}, {len(tts_times)}"
 
+        if add_tts_in_parrallel:
+            chunk_ready = np.array(gen_times) + np.array(tts_times)
+        else:
+            chunk_ready = np.array(gen_times) + np.cumsum(tts_times)
+        
         delays = self.compute_delays(chunk_ready, spk_times)
 
         metrics = {
