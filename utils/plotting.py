@@ -76,7 +76,7 @@ def plot_timelines(evaluator, chunks,
             color=color,
             alpha=0.2,
         )
-        ax2.hist(delay[delay > 0], bins=20, color=color, alpha=0.4) # , edgecolor="black"
+        ax2.hist(delay[delay > 0], bins=20, color=color, alpha=0.4)
 
     ax1.set_xlabel('Chunk index')
     ax1.set_ylabel('Time (s)')
