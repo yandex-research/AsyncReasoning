@@ -102,26 +102,48 @@ class TTSEvaluator:
             current_tokens.clear()
             current_times.clear()
 
-        for tok, t in token_times:
-            stripped = tok.lstrip()  # remove leading spaces for detection
+        i = 0
+        total_tokens = len(token_times)
+        def next_is_dollar(i):
+            return (i + 1 < total_tokens) and (token_times[i + 1][0].strip() == "$")
 
-            if not inside_math:
-                if stripped.startswith('$$'):
-                    inside_math = True
-                    delimiter = '$$'
-                elif stripped.startswith('$'):
-                    inside_math = True
-                    delimiter = '$'
-            else:
-                if delimiter == '$$' and '$$' in stripped:
-                    inside_math = False
-                    delimiter = None
-                elif delimiter == '$' and ('$' in stripped and not stripped.startswith('$$')):
-                    inside_math = False
-                    delimiter = None
-
+        while i < total_tokens:
+            tok, t = token_times[i]
+            # We live in assumption that if tok contains $ then tok.strip() either "$" or "$$"
+            stripped = tok.strip()
+            
             current_tokens.append(tok)
             current_times.append(t)
+
+            if not inside_math:
+                if stripped == "$$":
+                    inside_math, delimiter = True, "$$"
+                elif stripped == "$":
+                    if next_is_dollar(i):
+                        # "$" + "$" => "$$" opener
+                        inside_math, delimiter = True, "$$"
+                        i += 1  # consume the second "$"
+                        # also record it
+                        tok2, t2 = token_times[i]
+                        current_tokens.append(tok2)
+                        current_times.append(t2)
+                    else:
+                        inside_math, delimiter = True, "$"
+            else:
+                if delimiter == "$$":
+                    if stripped == "$$":
+                        inside_math, delimiter = False, None
+                    elif stripped == "$" and next_is_dollar(i):
+                        # "$" + "$" => "$$" closer
+                        inside_math, delimiter = False, None
+                        i += 1  # consume the second "$"
+                        tok2, t2 = token_times[i]
+                        current_tokens.append(tok2)
+                        current_times.append(t2)
+                else:  # delimiter == "$"
+                    if stripped == "$":
+                        inside_math, delimiter = False, None
+            i += 1
 
             if len(current_tokens) >= k and not inside_math:
                 flush()
