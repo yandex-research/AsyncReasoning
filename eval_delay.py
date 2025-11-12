@@ -114,21 +114,20 @@ class TTSEvaluator:
         i = 0
         total_tokens = len(token_times)
         def next_is_dollar(i):
-            return (i + 1 < total_tokens) and (token_times[i + 1][0].strip() == "$")
+            return (i + 1 < total_tokens) and (token_times[i + 1][0].strip().startswith("$"))
 
         while i < total_tokens:
             tok, t = token_times[i]
-            # We live in assumption that if tok contains $ then tok.strip() either "$" or "$$"
             stripped = tok.strip()
-            assert (not "$" in stripped) or (stripped in ["$", "$$"])
+            assert (not "$" in stripped) or stripped.startswith("$$") or stripped.startswith("$"), f"{stripped=}, {tok=}"
             
             current_tokens.append(tok)
             current_times.append(t)
 
             if not inside_math:
-                if stripped == "$$":
+                if stripped.startswith("$$"):
                     inside_math, delimiter = True, "$$"
-                elif stripped == "$":
+                elif stripped.startswith("$"):
                     if next_is_dollar(i):
                         # "$" + "$" => "$$" opener
                         inside_math, delimiter = True, "$$"
@@ -140,10 +139,10 @@ class TTSEvaluator:
                     else:
                         inside_math, delimiter = True, "$"
             else:
-                if delimiter == "$$":
-                    if stripped == "$$":
+                if delimiter.startswith("$$"):
+                    if stripped.startswith("$$"):
                         inside_math, delimiter = False, None
-                    elif stripped == "$" and next_is_dollar(i):
+                    elif stripped.startswith("$") and next_is_dollar(i):
                         # "$" + "$" => "$$" closer
                         inside_math, delimiter = False, None
                         i += 1  # consume the second "$"
@@ -151,7 +150,7 @@ class TTSEvaluator:
                         current_tokens.append(tok2)
                         current_times.append(t2)
                 else:  # delimiter == "$"
-                    if stripped == "$":
+                    if stripped.startswith("$"):
                         inside_math, delimiter = False, None
             i += 1
 
