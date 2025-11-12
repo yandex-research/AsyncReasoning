@@ -19,5 +19,5 @@ librosa>=0.11.0
 rotary_embedding_torch
 einops>=0.8.1
 progressbar>=2.5
-torchaudio==2.9.0
+torchaudio==2.8.0
 setuptools>=80.9.0
