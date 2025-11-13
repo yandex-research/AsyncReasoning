@@ -3,7 +3,7 @@ project(HogwildCache CUDA CXX)
 include(FetchContent)
 
 set(CMAKE_CUDA_STANDARD 17)
-set(CMAKE_CUDA_ARCHITECTURES "80;86;89")
+set(CMAKE_CUDA_ARCHITECTURES "80;86;89;90a")
 
 find_package(CUDAToolkit REQUIRED)
 
