@@ -165,9 +165,11 @@ class HogwildCache(Cache):
             mapping: Dict[int, InternalCacheMeta] = {}
             workers = len(self.cache_structure)
 
-            for cs in self.cache_structure[0]:
-                mapping[id(cs)] = InternalCacheMeta(
-                    cos=[None] * workers, sin=[None] * workers, loc=[None] * workers, cs=cs)
+            for worker_cache_structure in self.cache_structure: 
+                for cs in worker_cache_structure:
+                    if id(cs) not in mapping:
+                        mapping[id(cs)] = InternalCacheMeta(
+                            cos=[None] * workers, sin=[None] * workers, loc=[None] * workers, cs=cs)
 
             # and construct the info we need to actually run attention
             for w in range(key_states.shape[0]):
@@ -179,6 +181,14 @@ class HogwildCache(Cache):
                     # tokens currently being added
                     pos_t = torch.arange(pos - key_states.shape[2], pos, device=key_states.device, dtype=torch.int32)
                     mapping[id(cs)].loc[w] = pos_t
+            
+            # shift fragments that are not used by one of the workers
+            # this way, these fragments won't affect the attention weights due to the causal mask
+            for entry in mapping.values():
+                for w in range(key_states.shape[0]):
+                    if entry.loc[w] is None:
+                        pos_t = torch.arange(-key_states.shape[2], 0, device=key_states.device, dtype=torch.int32)
+                        entry.loc[w] = pos_t
 
             # rearrange
             locations = []
