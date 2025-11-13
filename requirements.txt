@@ -1,3 +1,4 @@
+# For hogwild
 accelerate==1.6.0
 datasets==3.5.0
 numpy>=2.2.4
@@ -6,3 +7,17 @@ torch>=2.6.0
 transformers==4.51.0
 wandb>=0.17.2
 tqdm
+
+# For eval
+latex2mathml==3.78.1
+
+# For tortoise-tts
+deepspeed>=0.18.2
+unidecode>=1.4.0
+inflect>=7.5.0
+librosa>=0.11.0
+rotary_embedding_torch
+einops>=0.8.1
+progressbar>=2.5
+torchaudio>=2.8.0
+setuptools>=80.9.0
