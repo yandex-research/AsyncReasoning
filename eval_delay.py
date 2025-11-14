@@ -119,15 +119,15 @@ class TTSEvaluator:
         while i < total_tokens:
             tok, t = token_times[i]
             stripped = tok.strip()
-            assert (not "$" in stripped) or stripped.startswith("$$") or stripped.startswith("$"), f"{stripped=}, {tok=}"
+            assert (not "$" in stripped) or ("$$" in stripped and stripped.count("$") == 2) or ("$" in stripped and stripped.count("$") == 1), f"{stripped=}, {tok=}"
             
             current_tokens.append(tok)
             current_times.append(t)
 
             if not inside_math:
-                if stripped.startswith("$$"):
+                if "$$" in stripped:
                     inside_math, delimiter = True, "$$"
-                elif stripped.startswith("$"):
+                elif "$" in stripped:
                     if next_is_dollar(i):
                         # "$" + "$" => "$$" opener
                         inside_math, delimiter = True, "$$"
@@ -140,9 +140,9 @@ class TTSEvaluator:
                         inside_math, delimiter = True, "$"
             else:
                 if delimiter.startswith("$$"):
-                    if stripped.startswith("$$"):
+                    if "$$" in stripped:
                         inside_math, delimiter = False, None
-                    elif stripped.startswith("$") and next_is_dollar(i):
+                    elif "$" in stripped and next_is_dollar(i):
                         # "$" + "$" => "$$" closer
                         inside_math, delimiter = False, None
                         i += 1  # consume the second "$"
@@ -150,7 +150,7 @@ class TTSEvaluator:
                         current_tokens.append(tok2)
                         current_times.append(t2)
                 else:  # delimiter == "$"
-                    if stripped.startswith("$"):
+                    if "$" in stripped:
                         inside_math, delimiter = False, None
             i += 1
 
@@ -254,14 +254,16 @@ class TTSEvaluator:
         >>> len(spk_times)
         2
         """
-        flag = True
-        while flag:
-            try:
-                frames_srate = []
-                spk_times = []
-                tts_times = []
-                t0 = time.perf_counter()
-                for text in texts: # This is needed due to internal limit for 400 tokein on whole text
+        
+        frames_srate = []
+        spk_times = []
+        tts_times = []
+        t0 = time.perf_counter()
+        for text in texts: # This is needed due to internal limit for 400 tokein on whole text
+            # assert not (text is None or text.strip() == ""), f"Empty text in texts: {text}"
+            flag = True
+            while flag:
+                try:
                     for sample_rate, frame in self._inference(
                         text=text,
                         script=None,
@@ -275,9 +277,9 @@ class TTSEvaluator:
                         tts_times.append(t1 - t0)
                         frames_srate.append((frame, sample_rate))
                         t0 = time.perf_counter()
-                flag = False
-            except RuntimeError as RE:
-                logger.debug(f"Caught RuntimeError: {RE}")
+                    flag = False
+                except RuntimeError as RE:
+                    logger.debug(f"Caught RuntimeError: {RE}")
 
         total_frame = np.concatenate([el[0] for el in frames_srate], axis=0)
         return total_frame, frames_srate[0][1], spk_times, tts_times
