@@ -197,9 +197,14 @@ def run_eval(split_from, split_to):
             chunks, audio = evaluator.get_chunks_with_tts(token_times, k_chunks=5, return_audio=True)
             metrics = evaluator(**chunks, add_tts_in_parrallel=True)
             measured_delays_over_dataset.append((metrics["total_delay"], metrics["delays"], (find_last_valid_expression(tokenizer.decode(writer_output_tokens)), answer)))
-        except AssertionError as AE:
-            logger.error(f"AssertionError on sample {idx}: {AE}")
-            measured_delays_over_dataset.append((None, None, AE, None))
+        # except AssertionError as AE:
+        #     logger.error(f"AssertionError on sample {idx}: {AE}")
+        #     measured_delays_over_dataset.append((None, None, AE, None))
+        except Exception as E:
+            logger.error(f"¥Exception on sample {idx}: {E}")
+            measured_delays_over_dataset.append((None, None, (E, None)))
+        last = measured_delays_over_dataset[-1]
+        print(f"Total delay: {last[0]}, Answers: {last[2][0]} =?= {last[2][1]}")
 
     with open(f"math-500_split_{split_from}-{split_to}.pkl", "wb") as f:
         pickle.dump(measured_delays_over_dataset, f)
