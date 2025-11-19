@@ -190,7 +190,6 @@ class TTSEvaluator:
     def _inference(
         self,
         text,
-        script,
         voice,
         voice_b,
         seed,
@@ -199,11 +198,7 @@ class TTSEvaluator:
         """
         Slightly altered inference function from tortois-tts
         """
-        if text is None or text.strip() == "":
-            with open(script.name) as f:
-                text = f.read()
-            if text.strip() == "":
-                raise gr.Error("Please provide either text or script file with content.")
+        assert text is not None and text.strip() != "", f"Provide text please."
 
         if split_by_newline == "Yes":
             texts = list(filter(lambda x: x.strip() != "", text.split("\n")))
@@ -227,12 +222,16 @@ class TTSEvaluator:
                 conditioning_latents=conditioning_latents,
                 preset="ultra_fast",
                 k=1,
-                verbose=False
+                verbose=False,
+                overlap_wav_len=1, # This is not the best way to do that!
             ):
                 total_audio_frame.append(audio_frame.cpu().detach().numpy())
             yield (24000, np.concatenate(total_audio_frame, axis=0))
 
-    def get_audio_track(self, texts: Sequence[str]) -> Tuple[np.ndarray, int, List[float], List[float]]:
+    def get_audio_track(self, 
+        texts: Sequence[str],
+        k_chunks: int,
+    ) -> Tuple[np.ndarray, int, List[float], List[float]]:
         """
         Generate and concatenate audio tracks for a sequence of text chunks using a TTS model.
 
@@ -257,34 +256,42 @@ class TTSEvaluator:
         2
         """
         
-        frames_srate = []
+        frames = []
         spk_times = []
         tts_times = []
-        t0 = time.perf_counter()
-        for text in texts: # This is needed due to internal limit for 400 tokein on whole text
-            # assert not (text is None or text.strip() == ""), f"Empty text in texts: {text}"
-            flag = True
-            while flag:
-                try:
-                    for sample_rate, frame in self._inference(
-                        text=text,
-                        script=None,
-                        voice="freeman",
-                        voice_b="disabled",
-                        seed=42,
-                        split_by_newline="Yes",
-                    ):
-                        t1 = time.perf_counter()
-                        spk_times.append(len(frame) / sample_rate)
-                        tts_times.append(t1 - t0)
-                        frames_srate.append((frame, sample_rate))
-                        t0 = time.perf_counter()
-                    flag = False
-                except RuntimeError as RE:
-                    logger.debug(f"Caught RuntimeError: {RE}")
+        k_chunks = 3 * k_chunks # make formulas sound more natural
+        for text in texts:
+            if text is None or text.strip() == "":
+                tts_times.append(0)
+                spk_times.append(0)
+                continue
 
-        total_frame = np.concatenate([el[0] for el in frames_srate], axis=0)
-        return total_frame, frames_srate[0][1], spk_times, tts_times
+            t0 = time.perf_counter()
+            spk_time = 0
+            
+            words = text.split(" ")
+            chunks = []
+            for i in range(0, len(words), k_chunks):
+                chunks.append(" ".join(words[i:i+k_chunks]))
+            splitted_text = "\n".join(chunks)
+
+            for sample_rate, frame in self._inference(
+                text=splitted_text,
+                voice="freeman",
+                voice_b="disabled",
+                seed=42,
+                split_by_newline="Yes",
+            ): # TODO Here my arise RuntimeError of 
+                assert sample_rate == 24000, "Got unexpected sample_rate, default is 24000"
+                
+                spk_time += len(frame) / sample_rate
+                frames.append(frame)
+
+            t1 = time.perf_counter()
+            tts_times.append(t1 - t0)
+            spk_times.append(spk_time)
+        total_frame = np.concatenate(frames, axis=0)
+        return total_frame, 24000, spk_times, tts_times
 
     @staticmethod
     def get_kwargs_by_description(
@@ -382,7 +389,7 @@ class TTSEvaluator:
         gen_times = [el["times"][-1] for el in chunked_token_times]
         chunk_sizes = [len(el["times"]) for el in chunked_token_times]
 
-        total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(texts)
+        total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(texts, k_chunks)
 
         audio = {
             "frame": total_frame,
