@@ -66,7 +66,6 @@ Respond with only "Yes" or "No" (without quotes). Do not include a rationale.
 
     Expression 1: %(expression1)s
     Expression 2: %(expression2)s
-<think></think>
 """.strip()
 
 def check_equality_judge(
@@ -107,7 +106,7 @@ def check_equality_local_model(
     >>> check_equality_local_model(model, tokenizer, "\\boxed{3, 2, 1}", "3, 2, 1") 
     <<< True
     """
-    prompt = EQUALITY_TEMPLATE % {"expression1": expr1, "expression2": expr2}
+    prompt = EQUALITY_TEMPLATE % {"expression1": expr1, "expression2": expr2} + "\n<think>\n\n</think>"
     tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
     inputs = tokenizer([prompt], **tokenizer_kwargs).to(model.device)
     prompt_len = inputs["input_ids"][0].shape[0]
