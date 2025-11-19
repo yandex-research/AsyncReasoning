@@ -122,6 +122,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.kernel_venv
 env/
 venv/
 ENV/
@@ -166,5 +167,10 @@ node_modules/
 
 
 # Our evals dir
-# evals/
+eval_results/
 *.pkl
+
+math-500
+
+# Not to push your token
+utils/eliza_config.json
