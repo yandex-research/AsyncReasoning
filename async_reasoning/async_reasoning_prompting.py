@@ -43,5 +43,3 @@ Solve the following problem:
         # these questions are inserted to change mode depending on model answers
         self.thinker_control_question = "\n\nSYSTEM: Given my current progress, is there enough information to continue writing the response to the user? (yes/no): "
         self.yes_token, self.no_token = "yes", "no"
-
-        self.judge_prompt = "You are a judge. You receive two LaTeX expressions:\nResponse: {response}\nAnswer: {answer}\nDetermine whether the mathematical meaning of the two expressions is exactly the same.\nIgnore formatting differences. Consider them equal only if they represent the same value or formula.\nReply with exactly one word (yes/no): "
