@@ -2,16 +2,11 @@ from enum import Enum
 import torch
 import transformers
 from hogwild.attention import HogwildCache
-
+from async_reasoning.async_reasoning_cache import State
 
 import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
-
-# state can be "thinker_only" or "thinker_and_writer"
-class State(Enum):
-    thinker_only = 0
-    thinker_and_writer = 1
 
 class AsyncReasoningCacheFastKernels:
     """Create separate blocks of LLM KV cache that are arranged depending on inference mode (thinker_only, thinker_and_writer, etc)"""
