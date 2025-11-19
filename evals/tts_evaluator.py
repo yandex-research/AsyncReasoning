@@ -69,6 +69,8 @@ class TTSEvaluator:
             mathml = latex2mathml.converter.convert(latex)
             return TTSEvaluator.clearspeak(mathml)[:-1]
 
+        # Removed boxed voicing, it does not work well with clearspeak
+        text = re.sub(r'\\boxed\s*{([^}]*)}', r'\1', text)
         pattern = re.compile(r"\$\$([^$]+)\$\$|\$([^$]+)\$")
         return re.sub(pattern, replace_math, text)
     
