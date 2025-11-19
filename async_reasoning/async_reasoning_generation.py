@@ -114,7 +114,7 @@ class Solver:
                     writer_output_tokens.append(int(writer_next_token))
                     thinker_output_tokens.append(int(thinker_next_token))
                     t1 = time.perf_counter()
-                    token_times.append((self.tokenizer.decode(writer_next_token.item()), t1 - t0))
+                    token_times.append((self.tokenizer.decode(writer_next_token.item()), t1 - t0, step))
                     if self.is_end_of_step(writer_output_tokens):  # wait for the thinker's signal to continue
                         cache.state = State.thinker_only
                 else:
