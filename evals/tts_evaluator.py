@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 import numpy as np
 import torch
 import torchaudio
@@ -37,7 +39,7 @@ class TTSEvaluator:
         'one half'
         """
         result = subprocess.run(
-            ["../node_modules/.bin/sre"], # TODO unhardcode path 
+            [f"{Path(__file__).resolve().parent}/../node_modules/.bin/sre"], # TODO unhardcode path 
             input=mathml,
             text=True,
             capture_output=True,
