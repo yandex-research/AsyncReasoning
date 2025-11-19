@@ -33,8 +33,8 @@ Solve the following problem:
 {problem}<|im_end|>
 <|im_start|>assistant""".strip()
 
-        self.writer_split = " [additional thoughts will appear here]\n</think>\n"
-        self.thinker_split = " [the system will continute writing the response here]"
+        self.writer_split = " SYSTEM: [additional thoughts will appear here]\n</think>\n"
+        self.thinker_split = " SYSTEM: [the system will continute writing the response here]"
 
         # writer_output and thinker_output starts with these prefixes
         self.writer_output_prefix = f"""\nI am in Writer mode. My text is visible to the user. I focus on clear, precise expression and careful word choice. I write only what is well-reasoned and verified in my workspace. I never speculate or improvise. If my thinking shifts or reveals an error, I immediately adjust. My goal is calm, accurate, and readable output."""
@@ -43,3 +43,5 @@ Solve the following problem:
         # these questions are inserted to change mode depending on model answers
         self.thinker_control_question = "\n\nSYSTEM: Given my current progress, is there enough information to continue writing the response to the user? (yes/no): "
         self.yes_token, self.no_token = "yes", "no"
+
+        self.judge_prompt = "You are a judge. You receive two LaTeX expressions:\nResponse: {response}\nAnswer: {answer}\nDetermine whether the mathematical meaning of the two expressions is exactly the same.\nIgnore formatting differences. Consider them equal only if they represent the same value or formula.\nReply with exactly one word (yes/no): "

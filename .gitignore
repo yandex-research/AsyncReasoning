@@ -166,5 +166,5 @@ node_modules/
 
 
 # Our evals dir
-evals_dir/
+# evals/
 *.pkl

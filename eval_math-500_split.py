@@ -17,6 +17,9 @@ T = TypeVar("T")
 from datasets import load_dataset
 from tqdm import tqdm
 import pickle
+import json
+
+import traceback
 
 import logging
 logger = logging.getLogger(__name__)
@@ -93,6 +96,20 @@ def run_eval(split_from, split_to):
     model_surgery(model)
     print(model)
 
+    def compare_with_same_model(response, answer):
+        return response == answer # TODO
+        assert False, "It does not work with fast kernel"
+        next_inputs = tokenizer(prompting.judge_prompt, **tokenizer_kwargs).to(device)
+        logits = model(**next_inputs, use_cache=False).logits[..., -1, :]
+        probs = logits.softmax(-1)
+
+        yes_id = tokenizer(prompting.yes_token, **tokenizer_kwargs)["input_ids"].item()
+        no_id  = tokenizer(prompting.no_token, **tokenizer_kwargs)["input_ids"].item()
+
+        is_equal = (probs[..., yes_id] > probs[..., no_id]).item()
+        return is_equal
+
+
     @torch.inference_mode()
     def check_if_should_continue_writing(cache: AsyncReasoningCacheFastKernels, use_trimming=False) -> bool:
         if use_trimming:
@@ -123,30 +140,23 @@ def run_eval(split_from, split_to):
         raw = f"# {state}" + "".join([thinker_headers, thinker_text, writer_headers, writer_text])
         display(Markdown(raw))
 
-
     def is_end_of_step(seq: Sequence[int]) -> bool:
         last_two_tokens = tokenizer.decode(seq[-2:])
         return last_two_tokens.endswith("\n\n")
 
     def async_reasoning_generate(prompting):
-        ### =======
         token_times = []
-        ### =======
 
-        # keep a list of generated tokens for printing (including the prefix that is already in cache)
         writer_output_tokens = tokenizer.encode(prompting.writer_output_prefix, **tokenizer_kwargs).flatten().tolist()
         thinker_output_tokens = tokenizer.encode(prompting.thinker_output_prefix, **tokenizer_kwargs).flatten().tolist()
 
-        # write \n\n that we have not encoded in cache yet - it will be encoded on the first step for each mode
         writer_output_tokens.append(tokenizer.encode("\n\n", **tokenizer_kwargs).item())
         thinker_output_tokens.append(tokenizer.encode("\n\n", **tokenizer_kwargs).item())
-
+        eos_generated = False
         cache = AsyncReasoningCacheFastKernels(model, tokenizer, prompting, tokenizer_kwargs=tokenizer_kwargs, starting_state=State.thinker_only)
         with torch.inference_mode():
             for step in range(1024):
-                ### =======
                 t0 = time.perf_counter()
-                ### =======
                 if cache.state == State.thinker_only:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=device)}
                     logits = model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
@@ -162,12 +172,8 @@ def run_eval(split_from, split_to):
                     writer_next_token, thinker_next_token = logits.argmax(-1)
                     writer_output_tokens.append(int(writer_next_token))
                     thinker_output_tokens.append(int(thinker_next_token))
-
-                    ### =======
                     t1 = time.perf_counter()
                     token_times.append((tokenizer.decode(writer_next_token.item()), t1 - t0))
-                    ### =======
-
                     if is_end_of_step(writer_output_tokens):  # wait for the thinker's signal to continue
                         cache.state = State.thinker_only
                 else:
@@ -177,13 +183,15 @@ def run_eval(split_from, split_to):
                     cache.state = State.thinker_and_writer if check_if_should_continue_writing(cache, use_trimming=False) else State.thinker_only
                 # display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)
                 if writer_output_tokens[-1] == tokenizer.eos_token_id:
-                    print("EOS GENERATED, IMA TEMINATE NOW")
+                    # print("EOS GENERATED, IMA TEMINATE NOW")
+                    eos_generated = True
                     break
-        return writer_output_tokens, thinker_output_tokens, token_times
+        return writer_output_tokens, thinker_output_tokens, token_times, eos_generated
 
     dataset_math = load_dataset('HuggingFaceH4/MATH-500', cache_dir="math-500")
 
     measured_delays_over_dataset = []
+    os.makedirs(f"evals/math-500/math-500_split_{split_from}-{split_to}", exist_ok=True)
     evaluator = eval_delay.TTSEvaluator()
     for idx, (instruction, answer) in tqdm(enumerate(
             zip(dataset_math["test"]["problem"], dataset_math["test"]["answer"])
@@ -192,23 +200,45 @@ def run_eval(split_from, split_to):
             continue
         problem = f"{instruction}. Please provide the final answer in \\boxed{{ }}"
         prompting = AsyncReasoningPrompting(problem)
-        writer_output_tokens, thinker_output_tokens, token_times = async_reasoning_generate(prompting)
+        writer_output_tokens, thinker_output_tokens, token_times, eos_generated = async_reasoning_generate(prompting)
+        result = {
+            "idx": idx,
+            "is_equal": None,
+            "total_delay": None,
+            "delays": None,
+            "eos_generated": eos_generated,
+            "response_answers": None,
+            "correct_answer": answer,
+            "error": None,
+        }
         try:
             chunks, audio = evaluator.get_chunks_with_tts(token_times, k_chunks=5, return_audio=True)
             metrics = evaluator(**chunks, add_tts_in_parrallel=True)
-            measured_delays_over_dataset.append((metrics["total_delay"], metrics["delays"], (find_last_valid_expression(tokenizer.decode(writer_output_tokens)), answer)))
-        # except AssertionError as AE:
-        #     logger.error(f"AssertionError on sample {idx}: {AE}")
-        #     measured_delays_over_dataset.append((None, None, AE, None))
-        except Exception as E:
-            logger.error(f"¥Exception on sample {idx}: {E}")
-            measured_delays_over_dataset.append((None, None, (E, None)))
-        last = measured_delays_over_dataset[-1]
-        print(f"Total delay: {last[0]}, Answers: {last[2][0]} =?= {last[2][1]}")
+            detokenized = tokenizer.decode(writer_output_tokens)
+            response = find_last_valid_expression(detokenized)
+            if response is None:
+                response = detokenized
+                is_equal = None
+            else:
+                is_equal = compare_with_same_model(response, answer)
+            result.update({
+                "is_equal": is_equal,
+                "total_delay": float(metrics["total_delay"]),
+                "delays": list(metrics["delays"]),
+                "response_answers": response,
+            })
+        except Exception as e:
+            traceback_str = traceback.format_exc()
+            logger.error(f"Exception on sample {idx}: {traceback_str}")
+            result.update({"error": traceback_str})
 
-    with open(f"math-500_split_{split_from}-{split_to}.pkl", "wb") as f:
+        measured_delays_over_dataset.append(result)
+        with open(f"evals/math-500/math-500_split_{split_from}-{split_to}/{idx}.json", "w") as f:
+            json.dump(result, f, indent=2)
+        print(f'>>> Total delay: {result["total_delay"]}, {eos_generated=}, Answers: {result["response_answers"]} =?= {result["correct_answer"]}')
+
+    with open(f"evals/math-500/math-500_split_{split_from}-{split_to}.pkl", "wb") as f:
         pickle.dump(measured_delays_over_dataset, f)
-
 
 
 if __name__ == "__main__":
