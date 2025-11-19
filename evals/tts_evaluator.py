@@ -84,24 +84,25 @@ class TTSEvaluator:
         - `text`: concatenated string of tokens in that chunk
         - `times`: list of corresponding token generation timestamps
 
-        :param token_times: List of (token, timestamp) pairs representing text tokens
-            and the time when each was generated.
+        :param token_times: List of (token, timestamp, step) triplets representing text tokens
+            and the time and step when each was generated.
         :param k: Target number of tokens per chunk, excluding LaTeX grouping
             constraints.
-        :returns: List of chunks, where each chunk is a dict with 'text' and 'times'.
+        :returns: List of chunks, where each chunk is a dict with 'text', 'times', 'steps'.
 
         :example:
         >>> token_times = [
         ...     ("We", 0.1), (" ", 0.2), ("are", 0.3),
         ...     (" ", 0.4), ("$", 0.5), ("x", 0.6), ("+", 0.7),
         ...     ("y", 0.8), ("$", 0.9), (" ", 1.0), ("done", 1.1)
-        ... ]
+        ... ] # and also step indices: 0, 1, 2, 3, 4, 5 ...
         >>> chunk_tokens_with_latex(token_times, k=5)
-        [{'text': 'We are $x+y$', 'times': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]},
-        {'text': 'done', 'times': [1.0, 1.1]}]
+        [{'text': 'We are $x+y$', 'times': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9], 'steps': [0, 1, 2, 3, 4..]},
+        {'text': 'done', 'times': [1.0, 1.1], 'steps': [10, 11, 12, 13, 14..]},
+        ]
         """
         chunks = []
-        current_tokens, current_times = [], []
+        current_tokens, current_times, current_steps = [], [], []
         inside_math = False
         delimiter = None  # "$" or "$$"
 
@@ -110,10 +111,12 @@ class TTSEvaluator:
                 return
             chunks.append({
                 'text': ''.join(current_tokens).strip().replace('\n', ""),
-                'times': current_times[:]
+                'times': current_times[:],
+                'steps': current_steps[:],
             })
             current_tokens.clear()
             current_times.clear()
+            current_steps.clear()
 
         i = 0
         total_tokens = len(token_times)
@@ -121,12 +124,13 @@ class TTSEvaluator:
             return (i + 1 < total_tokens) and (token_times[i + 1][0].strip().startswith("$"))
 
         while i < total_tokens:
-            tok, t = token_times[i]
+            tok, t, s = token_times[i]
             stripped = tok.strip()
             assert (not "$" in stripped) or ("$$" in stripped and stripped.count("$") == 2) or ("$" in stripped and stripped.count("$") == 1), f"{stripped=}, {tok=}"
             
             current_tokens.append(tok)
             current_times.append(t)
+            current_steps.append(s)
 
             if not inside_math:
                 if "$$" in stripped:
@@ -137,9 +141,10 @@ class TTSEvaluator:
                         inside_math, delimiter = True, "$$"
                         i += 1  # consume the second "$"
                         # also record it
-                        tok2, t2 = token_times[i]
+                        tok2, t2, s2 = token_times[i]
                         current_tokens.append(tok2)
                         current_times.append(t2)
+                        current_steps.append(s2)
                     else:
                         inside_math, delimiter = True, "$"
             else:
@@ -150,9 +155,10 @@ class TTSEvaluator:
                         # "$" + "$" => "$$" closer
                         inside_math, delimiter = False, None
                         i += 1  # consume the second "$"
-                        tok2, t2 = token_times[i]
+                        tok2, t2, s2 = token_times[i]
                         current_tokens.append(tok2)
                         current_times.append(t2)
+                        current_steps.append(s2)
                 else:  # delimiter == "$"
                     if "$" in stripped:
                         inside_math, delimiter = False, None
@@ -353,7 +359,7 @@ class TTSEvaluator:
         return kwargs
 
     def get_chunks_with_tts(self,
-        token_times: Sequence[Tuple[str, float]],
+        token_times: Sequence[Tuple[str, float, int]],
         k_chunks: int = 5,
         return_audio: bool = False,
     ) -> Union[Dict[str, Any], Tuple[Dict[str, Any], Dict[str, Any]]]: 
@@ -366,7 +372,7 @@ class TTSEvaluator:
         2. Converts LaTeX formulas within each chunk to spoken equivalents.
         3. Synthesizes TTS audio for each chunk and records timing information.
 
-        :param token_times: Sequence of (decoded_token, generation_timestamp) pairs.
+        :param token_times: Sequence of (decoded_token, generation_timestamp, step) tuples.
                             Includes the end-of-sequence token.
         :param k_chunks: Target number of tokens per chunk, excluding LaTeX constraints.
         :param return_audio: Whether to return concatenated audio waveform and rate.
@@ -389,6 +395,7 @@ class TTSEvaluator:
         chunked_token_times = self.chunk_tokens_with_latex(token_times[:-1], k=k_chunks)
         texts = [self.convert_markdown_with_latex(el["text"]) for el in chunked_token_times]
         gen_times = [el["times"][-1] for el in chunked_token_times]
+        gen_steps = [el["steps"] for el in chunked_token_times]
         chunk_sizes = [len(el["times"]) for el in chunked_token_times]
 
         total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(texts, k_chunks)
@@ -402,6 +409,7 @@ class TTSEvaluator:
             "text_chunks": texts,
             "chunk_sizes": np.array(chunk_sizes),
             "gen_times": np.array(gen_times), # timestamps
+            "gen_steps": gen_steps, # step index
             "tts_times": np.array(tts_times), # timedeltas
             "spk_times": np.array(spk_times), # timedeltas
             }
@@ -412,9 +420,11 @@ class TTSEvaluator:
         gen_times: Sequence[float],
         spk_times: Sequence[float],
         tts_times: Sequence[float],
+        gen_steps: Sequence[Sequence[int]] = None,
         add_tts_in_parrallel: bool = True,
         text_chunks=None,
         chunk_sizes=None,
+        return_delays=True,
     ) -> Dict[str, Any]:
         """
         Compute user-perceived delay metrics for a sequence of generated and spoken chunks.
@@ -429,13 +439,7 @@ class TTSEvaluator:
                                     If False, models sequential TTS after generation.
         :param text_chunks: Optional list of decoded text chunks (for reference only).
         :param chunk_sizes: Optional list of number of tokens per chunk (for reference only).
-        :returns: Dictionary with delay and duration metrics:
-            {
-                "total_delay": float,
-                "delays": np.ndarray,
-                "duration_no_delay": float,
-                "duration_with_delay": float,
-            }
+        :returns: Dictionary with delay and duration metrics
 
         :example:
         >>> metrics = evaluator([1.0, 3.0, 6.0], [2.0, 1.5, 3.0], [0.5, 0.8, 1.2])
@@ -444,18 +448,30 @@ class TTSEvaluator:
         """
         assert len(gen_times) == len(spk_times), f"{len(gen_times)}, {len(spk_times)}"
         assert len(gen_times) == len(tts_times), f"{len(gen_times)}, {len(tts_times)}"
+        if gen_steps is not None:
+            assert len(gen_times) == len(gen_steps), f"{len(gen_times)}, {len(gen_steps)}"
 
         if add_tts_in_parrallel:
             chunk_ready = np.array(gen_times) + np.array(tts_times)
         else:
             chunk_ready = np.array(gen_times) + np.cumsum(tts_times)
         
-        delays = self.compute_delays(chunk_ready, spk_times)
-
+        delays = np.array(self.compute_delays(chunk_ready, spk_times))
+        
         metrics = {
+            "delay_to_first": float(delays[0]),
             "total_delay": float(np.sum(delays)),
-            "delays": np.array(delays),
+            "total_delay_mius1": float(np.sum(np.max(delays - 1, 0))),
             "duration_no_delay": float(np.sum(spk_times)),
             "duration_with_delay": float(np.sum(spk_times) + float(np.sum(delays))),
         }
+        if gen_steps is not None:
+            steps_to_finish_chunk = np.array([1 + el[-1] - el[0] for el in gen_steps])
+            metrics.update({
+                "steps_to_first": int(gen_steps[0][-1]),
+                "delay_steps": int(gen_steps[-1][-1] - sum([len(el) for el in gen_steps])),
+                "delay_minus10steps": int(np.sum(np.max(steps_to_finish_chunk - 10, 0))),
+            })
+        if return_delays:
+            metrics.update({"delays": np.array(delays)})
         return metrics
