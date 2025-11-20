@@ -466,11 +466,17 @@ class TTSEvaluator:
             "duration_with_delay": float(np.sum(spk_times) + float(np.sum(delays))),
         }
         if gen_steps is not None:
-            steps_to_finish_chunk = np.array([1 + el[-1] - el[0] for el in gen_steps])
+            delay_minus10steps = 0
+            prev_generated_step = 0
+            for chunk in gen_steps:
+                for el in chunk:
+                    delay_minus10steps += max(el - prev_generated_step - 10, 0)
+                    prev_generated_step = el
+                    
             metrics.update({
                 "steps_to_first": int(gen_steps[0][-1]),
-                "delay_steps": int(gen_steps[-1][-1] - sum([len(el) for el in gen_steps])),
-                "delay_minus10steps": int(np.sum(np.maximum(steps_to_finish_chunk - 10, 0))), # TODO that is not it
+                "delay_steps": int(1 + gen_steps[-1][-1] - sum([len(el) for el in gen_steps])),
+                "delay_minus10steps": int(delay_minus10steps),
             })
         if return_delays:
             metrics.update({"delays": np.array(delays)})
