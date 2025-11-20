@@ -171,6 +171,3 @@ eval_results/
 *.pkl
 
 math-500/
-
-# Not to push your token
-utils/eliza_config.json

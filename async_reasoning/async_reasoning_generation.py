@@ -10,10 +10,6 @@ from typing import Sequence, Union, Tuple, Dict, Any
 from async_reasoning.async_reasoning_prompting import AsyncReasoningPrompting
 from async_reasoning.async_reasoning_cache import State, AsyncReasoningCache
 
-from async_reasoning.async_reasoning_prompting import AsyncReasoningPrompting
-from async_reasoning.async_reasoning_cache_fast_kernels import AsyncReasoningCacheFastKernels
-from hogwild.attention import model_surgery
-
 import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
@@ -26,18 +22,23 @@ class Solver:
         use_fast_kernel: bool = True
     ):
         if use_fast_kernel:
+            from async_reasoning.async_reasoning_cache_fast_kernels import AsyncReasoningCacheFastKernels
+            from hogwild.attention import model_surgery
             model_surgery(model)
+            self.Cache = AsyncReasoningCacheFastKernels
+        else:
+            self.Cache = AsyncReasoningCache
+
         self.model = model
         self.device = model.device
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
         self.forbidden_token_ix = forbidden_token_ix
         self.use_fast_kernel = use_fast_kernel
-        self.Cache = AsyncReasoningCacheFastKernels if use_fast_kernel else AsyncReasoningCache
 
     @torch.inference_mode()
     def check_if_should_continue_writing(self,
-        cache: Union[AsyncReasoningCache, AsyncReasoningCacheFastKernels],
+        cache, # Union[AsyncReasoningCache, AsyncReasoningCacheFastKernels],
         prompting: AsyncReasoningPrompting,
         use_trimming=False) -> bool:
         if use_trimming:

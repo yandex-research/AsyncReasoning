@@ -289,7 +289,7 @@ class TTSEvaluator:
                 voice_b="disabled",
                 seed=42,
                 split_by_newline="Yes",
-            ): # TODO Here my arise RuntimeError of 
+            ):
                 assert sample_rate == 24000, "Got unexpected sample_rate, default is 24000"
                 
                 spk_time += len(frame) / sample_rate
