@@ -97,8 +97,8 @@ class AsyncReasoningSolver:
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
         with torch.inference_mode():
+            t0 = time.perf_counter()
             for step in range(budget):
-                t0 = time.perf_counter()
                 if cache.state == State.thinker_only:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=self.device)}
                     logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
