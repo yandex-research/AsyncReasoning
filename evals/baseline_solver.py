@@ -69,7 +69,7 @@ class BaselineSolver:
                 next_token = int(logits.argmax(-1))
                 if not finished_thinking:
                     thinker_output_tokens.append(next_token)
-                    if next_token == tokenizer.vocab["</think>"]:
+                    if next_token == self.tokenizer.vocab["</think>"]:
                         finished_thinking = True
                 else:
                     writer_output_tokens.append(next_token)
@@ -82,6 +82,6 @@ class BaselineSolver:
 
                 if display_generation_in_real_time:
                     self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)
-        writer_putput_str = self.tokenizer.decode(writer_output_tokens)
+        writer_output_str = self.tokenizer.decode(writer_output_tokens)
         thinker_output_str = self.tokenizer.decode(thinker_output_tokens)
-        return writer_putput_str, thinker_output_str, token_times, eos_generated
+        return writer_output_str, thinker_output_str, token_times, eos_generated

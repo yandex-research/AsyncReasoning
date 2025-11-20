@@ -128,5 +128,5 @@ class AsyncReasoningSolver:
                 if writer_output_tokens[-1] == self.tokenizer.eos_token_id:
                     eos_generated = True
                     break
-        writer_putput_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
-        return writer_putput_str, thinker_output_str, token_times, eos_generated
+        writer_output_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
+        return writer_output_str, thinker_output_str, token_times, eos_generated
