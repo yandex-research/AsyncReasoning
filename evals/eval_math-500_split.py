@@ -145,23 +145,26 @@ def main():
 
         result.update({"is_equal": is_equal})
 
-        try:
-            chunks, audio = evaluator.get_chunks_with_tts(token_times, k_chunks=5, return_audio=True)
-            metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
-        except Exception as e:
-            msg = f"Exception during TTS on sample {idx}: {str(e)}"
-            logger.error(msg)
-            result.update({"error": msg})
-            measured_delays_over_dataset.append(result)
-            flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
-            continue
+        if not token_times:
+            metrics = None
+        else:
+            try:
+                chunks, audio = evaluator.get_chunks_with_tts(token_times, k_chunks=5, return_audio=True)
+                metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
+            except Exception as e:
+                msg = f"Exception during TTS on sample {idx}: {str(e)}"
+                logger.error(msg)
+                result.update({"error": msg})
+                measured_delays_over_dataset.append(result)
+                flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
+                continue
 
         result.update({"metrics": metrics})
         measured_delays_over_dataset.append(result)
         flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
 
-        print(f'>>> {eos_generated=}, Total delay: {metrics["total_delay"]}')
-    with open(f"{exp_dir_path}/../math-500_split_{split_from}-{split_to}.pkl", "wb") as f:
+        print(f'>>> {eos_generated=}, Total delay: {metrics["total_delay"] if metrics else None}')
+    with open(f"{exp_dir_path}/all_results.pkl", "wb") as f:
         pickle.dump(measured_delays_over_dataset, f)
 
 

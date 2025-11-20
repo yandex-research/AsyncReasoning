@@ -45,28 +45,38 @@ class BaselineSolver:
             budget: int = 1024,
         ):
 
-        prompt = problem
-        if not self.thinker_enabled:
-            prompt += "<think>\n\n</think>"
-            finished_thinking = True
-        input_ids = self.tokenizer.encode(prompt, **self.tokenizer_kwargs).flatten().tolist()
+        finished_thinking = (not self.thinker_enabled)
+        text = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": problem}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=self.thinker_enabled
+        )
+        input_ids = self.tokenizer.encode(text, **self.tokenizer_kwargs).flatten().tolist()
 
         token_times = []
         writer_output_tokens = []
         thinker_output_tokens = []
 
-        finished_thinking = False
         eos_generated = False
+        past_key_values = None
 
         with torch.inference_mode():
+            t0 = time.perf_counter()
             for step in range(budget):
-                t0 = time.perf_counter()
 
-                next_inputs = {"input_ids": torch.tensor(input_ids, device=self.device)}
-                logits = self.model(**next_inputs).logits[..., -1, :]
+                next_inputs = {
+                    "input_ids": torch.tensor([input_ids], device=self.device),
+                    "use_cache": True,
+                    "past_key_values": past_key_values
+                }
+                outputs = self.model(**next_inputs)
+                logits = outputs.logits[..., -1, :]
+                past_key_values = outputs.past_key_values
                 if len(self.forbidden_token_ix) > 0:
                     logits[..., self.forbidden_token_ix] -= 100
                 next_token = int(logits.argmax(-1))
+                input_ids = [next_token]
                 if not finished_thinking:
                     thinker_output_tokens.append(next_token)
                     if next_token == self.tokenizer.vocab["</think>"]:
@@ -81,7 +91,7 @@ class BaselineSolver:
                         break
 
                 if display_generation_in_real_time:
-                    self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)
+                    self.display_tokens(writer_output_tokens, thinker_output_tokens)
         writer_output_str = self.tokenizer.decode(writer_output_tokens)
         thinker_output_str = self.tokenizer.decode(thinker_output_tokens)
         return writer_output_str, thinker_output_str, token_times, eos_generated
