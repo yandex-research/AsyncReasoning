@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
-class Solver:
+class AsyncReasoningSolver:
     def __init__(self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
@@ -80,7 +80,7 @@ class Solver:
         last_two_tokens = self.tokenizer.decode(seq[-2:])
         return last_two_tokens.endswith("\n\n")
 
-    def solve_with_async_reasoning(self,
+    def solve(self,
             problem: str,
             display_generation_in_real_time: bool = False,
             budget: int = 1024,

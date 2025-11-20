@@ -6,7 +6,6 @@ import argparse
 import torch
 import transformers
 
-from async_reasoning.async_reasoning_generation import Solver
 from evals.tts_evaluator import TTSEvaluator
 
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
@@ -24,6 +23,13 @@ logging.basicConfig(filename='demo_split.log', encoding='utf-8', level=logging.D
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=["async_reasoning", "baseline_think", "baseline_no_think"],
+        help="Select reasoning mode",
+    )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
     parser.add_argument("--split-from", type=int, required=True, help="Split of math-500 from:")
     parser.add_argument("--split-to", type=int, required=True, help="Split of math-500 :to")
@@ -36,10 +42,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+    mode = args.mode
     split_from, split_to = args.split_from, args.split_to
     use_fast_kernel = not args.use_slow_kernel
     use_api_not_local = True # TODO make flag
     log_each_sample = args.log_each_sample
+    # TODO better asserts for args combinations
 
     def flush_json_log(path: str, obj):
         with open(path, "w") as f:
@@ -58,12 +66,28 @@ def main():
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map=device,
     )
-    forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
 
-    solver = Solver(model, tokenizer, forbidden_token_ix, use_fast_kernel=use_fast_kernel)
+    solver_kwargs = {}
+    if mode in ["async_reasoning"]:
+        from async_reasoning.async_reasoning_generation import AsyncReasoningSolver as Solver
+        forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
+        solver_kwargs.update({
+            "forbidden_token_ix": forbidden_token_ix,
+            "use_fast_kernel": use_fast_kernel,
+        })
+    elif mode in ["baseline_think", "baseline_no_think"]:
+        from evals.baseline_solver import BaselineSolver as Solver
+        solver_kwargs.update({
+            "forbidden_token_ix": [],
+            "thinker_enabled": (mode == "baseline_think"),
+        })
+    else:
+        raise ValueError("unsupported mode")
+
+    solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_math = load_dataset('HuggingFaceH4/MATH-500', cache_dir=f"{Path(__file__).resolve().parent}/../math-500") # TODO remove hardcoded cache dir 
 
-    exp_dir_path = f"{args.path_to_results}/math-500_split_{split_from}-{split_to}"
+    exp_dir_path = f"{args.path_to_results}/{mode}_math-500_split_{split_from}-{split_to}"
     os.makedirs(exp_dir_path, exist_ok=True)
 
     measured_delays_over_dataset = []
@@ -89,7 +113,7 @@ def main():
 
         try:
             writer_putput_str, thinker_output_str, token_times, eos_generated = \
-                solver.solve_with_async_reasoning(problem, budget=args.budget)
+                solver.solve(problem, budget=args.budget)
             response = find_last_valid_expression(writer_putput_str)
         except Exception as e:
             msg = f"Exception during GENERATION on sample {idx}: {str(e)}"
