@@ -474,7 +474,7 @@ class TTSEvaluator:
                     prev_generated_step = el
                     
             metrics.update({
-                "steps_to_first": int(gen_steps[0][-1]),
+                "steps_to_first": int(gen_steps[0][0]),
                 "delay_steps": int(1 + gen_steps[-1][-1] - sum([len(el) for el in gen_steps])),
                 "delay_minus10steps": int(delay_minus10steps),
             })
