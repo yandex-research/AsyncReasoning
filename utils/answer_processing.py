@@ -121,7 +121,7 @@ def check_equality_local_model(
 
 
 def find_last_valid_expression(
-    response: str, prefix: str = "\\boxed{", extract_result: Callable[[str], str] = lambda x: x[7:-1] # this is to extraced without \\boxed{...}
+    response: str, prefix: str = "\\boxed{", extract_result: Callable[[str], str] = lambda x: x
 ) -> Optional[str]:
     """
     Find the last correct brace sequence that starts with prefix and passes extract_result; return it including prefix

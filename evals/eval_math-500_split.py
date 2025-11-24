@@ -112,7 +112,7 @@ def main():
         try:
             writer_putput_str, thinker_output_str, token_times, eos_generated = \
                 solver.solve(problem, budget=args.budget)
-            response = find_last_valid_expression(writer_putput_str)
+            response = find_last_valid_expression(writer_putput_str, extract_result=lambda x: x[7:-1])
         except Exception as e:
             msg = f"Exception during GENERATION on sample {idx}: {str(e)}"
             logger.error(msg)
