@@ -67,7 +67,7 @@ def main():
 
     solver_kwargs = {}
     if mode in ["async_reasoning"]:
-        from async_reasoning.generation import AsyncReasoningSolver as Solver
+        from async_reasoning.solver import AsyncReasoningSolver as Solver
         forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
         solver_kwargs.update({
             "forbidden_token_ix": forbidden_token_ix,
