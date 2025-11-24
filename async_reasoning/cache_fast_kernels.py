@@ -2,7 +2,7 @@ from enum import Enum
 import torch
 import transformers
 from hogwild.attention import HogwildCache
-from async_reasoning.async_reasoning_cache import State
+from async_reasoning.cache import State
 
 import logging
 logger = logging.getLogger(__name__)

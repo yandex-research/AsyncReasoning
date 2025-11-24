@@ -5,8 +5,8 @@ import shared_cache
 from IPython.display import display, Markdown, clear_output
 from typing import Sequence, Union, Tuple, Dict, Any
 
-from async_reasoning.async_reasoning_prompting import AsyncReasoningPrompting
-from async_reasoning.async_reasoning_cache import State, AsyncReasoningCache
+from async_reasoning.prompting import AsyncReasoningPrompting
+from async_reasoning.cache import State, AsyncReasoningCache
 
 import logging
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ class AsyncReasoningSolver:
         use_fast_kernel: bool = True
     ):
         if use_fast_kernel:
-            from async_reasoning.async_reasoning_cache_fast_kernels import AsyncReasoningCacheFastKernels
+            from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
             model_surgery(model)
             self.Cache = AsyncReasoningCacheFastKernels

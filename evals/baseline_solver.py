@@ -4,7 +4,7 @@ import transformers
 from IPython.display import display, Markdown, clear_output
 from typing import Sequence, Union, Tuple, Dict, Any
 
-from async_reasoning.async_reasoning_prompting import AsyncReasoningPrompting
+from async_reasoning.prompting import AsyncReasoningPrompting
 
 import logging
 logger = logging.getLogger(__name__)
