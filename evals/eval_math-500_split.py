@@ -110,9 +110,9 @@ def main():
         problem = f"{instruction}. Please provide the final answer in \\boxed{{ }}"
 
         try:
-            writer_putput_str, thinker_output_str, token_times, eos_generated = \
+            writer_output_str, thinker_output_str, token_times, eos_generated = \
                 solver.solve(problem, budget=args.budget)
-            response = find_last_valid_expression(writer_putput_str, extract_result=lambda x: x[7:-1])
+            response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         except Exception as e:
             msg = f"Exception during GENERATION on sample {idx}: {str(e)}"
             logger.error(msg)
@@ -124,7 +124,7 @@ def main():
         result.update({
             "eos_generated": eos_generated,
             "response_answers": response,
-            "writer_response": writer_putput_str,
+            "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
         })
         
