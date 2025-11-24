@@ -106,6 +106,7 @@ def check_equality_local_model(
     >>> check_equality_local_model(model, tokenizer, "\\boxed{3, 2, 1}", "3, 2, 1") 
     <<< True
     """
+    assert_model_is_pristine(model)
     prompt = EQUALITY_TEMPLATE % {"expression1": expr1, "expression2": expr2} + "\n<think>\n\n</think>"
     tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
     inputs = tokenizer([prompt], **tokenizer_kwargs).to(model.device)
@@ -149,3 +150,25 @@ def parse_until_valid_brace_sequence(text: str, start: int = 0, end: Optional[in
         if balance == 0:
             return text[(original_start if keep_prefix else start): i + 1]
     raise ValueError("text does not have a correct bracket {/} ")
+
+
+def assert_model_is_pristine(model: transformers.PreTrainedModel):
+    from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
+
+    from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
+
+    if isinstance(model.config, Qwen2Config):
+        base_cls = Qwen2Attention
+    elif isinstance(model.config, Qwen3Config):
+        base_cls = Qwen3Attention
+    else:
+        raise NotImplementedError
+
+    for i, layer in enumerate(model.model.layers):
+        attn = layer.self_attn
+        if not isinstance(attn, base_cls):
+            raise AssertionError(
+                f"It seems like you use modified model. Layer {i}: expected {base_cls.__name__}, got {attn.__class__.__name__}"
+            )
