@@ -39,7 +39,7 @@ class TTSEvaluator:
         'one half'
         """
         result = subprocess.run(
-            [f"{Path(__file__).resolve().parent}/../node_modules/.bin/sre"], # TODO unhardcode path 
+            [f"{Path(__file__).resolve().parent}/../node_modules/.bin/sre"],
             input=mathml,
             text=True,
             capture_output=True,
@@ -283,6 +283,7 @@ class TTSEvaluator:
                 chunks.append(" ".join(words[i:i+k_chunks]))
             splitted_text = "\n".join(chunks)
 
+            prev_sample_rate = None
             for sample_rate, frame in self._inference(
                 text=splitted_text,
                 voice="freeman",
@@ -290,7 +291,9 @@ class TTSEvaluator:
                 seed=42,
                 split_by_newline="Yes",
             ):
-                assert sample_rate == 24000, "Got unexpected sample_rate, default is 24000"
+                if prev_sample_rate is not None:
+                    assert sample_rate == prev_sample_rate, f"Got unexpected {sample_rate=}, expected the same from prev chunk {prev_sample_rate=}"
+                prev_sample_rate = sample_rate
                 
                 spk_time += len(frame) / sample_rate
                 frames.append(frame)
@@ -299,7 +302,7 @@ class TTSEvaluator:
             tts_times.append(t1 - t0)
             spk_times.append(spk_time)
         total_frame = np.concatenate(frames, axis=0)
-        return total_frame, 24000, spk_times, tts_times
+        return total_frame, prev_sample_rate, spk_times, tts_times
 
     @staticmethod
     def get_kwargs_by_description(
