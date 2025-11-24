@@ -76,7 +76,6 @@ def main():
     elif mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
-            "forbidden_token_ix": [],
             "thinker_enabled": (mode == "baseline_think"),
         })
     else:
