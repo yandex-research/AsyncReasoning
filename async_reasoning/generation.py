@@ -36,7 +36,7 @@ class AsyncReasoningSolver:
 
     @torch.inference_mode()
     def check_if_should_continue_writing(self,
-        cache, # Union[AsyncReasoningCache, AsyncReasoningCacheFastKernels],
+        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'],
         prompting: AsyncReasoningPrompting,
         use_trimming=False) -> bool:
         if use_trimming:
