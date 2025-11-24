@@ -169,5 +169,3 @@ node_modules/
 # Our evals dir
 eval_results/
 *.pkl
-
-math-500/

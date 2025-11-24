@@ -83,7 +83,7 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_dataset('HuggingFaceH4/MATH-500', cache_dir=f"{Path(__file__).resolve().parent}/../math-500") # TODO remove hardcoded cache dir 
+    dataset_math = load_dataset('HuggingFaceH4/MATH-500')
 
     exp_dir_path = f"{args.path_to_results}/{mode}_math-500_split_{split_from}-{split_to}"
     os.makedirs(exp_dir_path, exist_ok=True)
