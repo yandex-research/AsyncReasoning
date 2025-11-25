@@ -66,8 +66,12 @@ class TTSEvaluator:
         """
         def replace_math(match):
             latex = (match.group(1) or match.group(2)).strip()
-            mathml = latex2mathml.converter.convert(latex)
-            return TTSEvaluator.clearspeak(mathml)[:-1]
+            try:
+                mathml = latex2mathml.converter.convert(latex)
+                clearspeech = TTSEvaluator.clearspeak(mathml)
+                return clearspeech[:-1]
+            except:
+                return f"BAD FORMULA: {latex}"
 
         # Removed boxed voicing, it does not work well with clearspeak
         text = re.sub(r'\\boxed\s*{([^}]*)}', r'\1', text)
@@ -195,50 +199,8 @@ class TTSEvaluator:
             earliest_next_chunk_start = real_chunk_start + chunk_audio_duration
         return delays
 
-    def _inference(
-        self,
-        text,
-        voice,
-        voice_b,
-        seed,
-        split_by_newline,
-    ):
-        """
-        Slightly altered inference function from tortois-tts
-        """
-        assert text is not None and text.strip() != "", f"Provide text please."
-
-        if split_by_newline == "Yes":
-            texts = list(filter(lambda x: x.strip() != "", text.split("\n")))
-        else:
-            texts = split_and_recombine_text(text)
-
-        voices = [voice]
-        if voice_b != "disabled":
-            voices.append(voice_b)
-
-        if len(voices) == 1:
-            voice_samples, conditioning_latents = load_voice(voice)
-        else:
-            voice_samples, conditioning_latents = load_voices(voices)
-
-        for j, text in enumerate(texts):
-            total_audio_frame = []
-            for audio_frame in self.tts.tts_with_preset(
-                text,
-                voice_samples=voice_samples,
-                conditioning_latents=conditioning_latents,
-                preset="ultra_fast",
-                k=1,
-                verbose=False,
-                overlap_wav_len=1, # This is not the best way to do that!
-            ):
-                total_audio_frame.append(audio_frame.cpu().detach().numpy())
-            yield (24000, np.concatenate(total_audio_frame, axis=0))
-
     def get_audio_track(self, 
         texts: Sequence[str],
-        k_chunks: int,
     ) -> Tuple[np.ndarray, int, List[float], List[float]]:
         """
         Generate and concatenate audio tracks for a sequence of text chunks using a TTS model.
@@ -263,11 +225,11 @@ class TTSEvaluator:
         >>> len(spk_times)
         2
         """
+        voice_samples, conditioning_latents = load_voice("freeman")
         
         frames = []
         spk_times = []
         tts_times = []
-        k_chunks = 3 * k_chunks # make formulas sound more natural
         for text in texts:
             if text is None or text.strip() == "":
                 tts_times.append(0)
@@ -276,33 +238,27 @@ class TTSEvaluator:
 
             t0 = time.perf_counter()
             spk_time = 0
-            
-            words = text.split(" ")
-            chunks = []
-            for i in range(0, len(words), k_chunks):
-                chunks.append(" ".join(words[i:i+k_chunks]))
-            splitted_text = "\n".join(chunks)
-
-            prev_sample_rate = None
-            for sample_rate, frame in self._inference(
-                text=splitted_text,
-                voice="freeman",
-                voice_b="disabled",
-                seed=42,
-                split_by_newline="Yes",
-            ):
-                if prev_sample_rate is not None:
-                    assert sample_rate == prev_sample_rate, f"Got unexpected {sample_rate=}, expected the same from prev chunk {prev_sample_rate=}"
-                prev_sample_rate = sample_rate
+            for j, text_chunk in enumerate(list(filter(lambda x: x.strip() != "", text.split("\n")))):
+                frame = np.concatenate([
+                    audio_frame.cpu().numpy() for audio_frame in self.tts.tts_with_preset(
+                        text_chunk,
+                        voice_samples=voice_samples,
+                        conditioning_latents=conditioning_latents,
+                        preset="ultra_fast",
+                        k=1,
+                        verbose=False,
+                        overlap_wav_len=1, # This is not the best way to do that!
+                    )
+                ], axis=0)
                 
-                spk_time += len(frame) / sample_rate
+                spk_time += len(frame) / self.tts.sample_rate
                 frames.append(frame)
 
             t1 = time.perf_counter()
             tts_times.append(t1 - t0)
             spk_times.append(spk_time)
         total_frame = np.concatenate(frames, axis=0)
-        return total_frame, prev_sample_rate, spk_times, tts_times
+        return total_frame, self.tts.sample_rate, spk_times, tts_times
 
     @staticmethod
     def get_kwargs_by_description(
@@ -395,13 +351,13 @@ class TTSEvaluator:
                 }
         """
 
-        chunked_token_times = self.chunk_tokens_with_latex(token_times[:-1], k=k_chunks)
+        chunked_token_times = self.chunk_tokens_with_latex(token_times, k=k_chunks)
         texts = [self.convert_markdown_with_latex(el["text"]) for el in chunked_token_times]
         gen_times = [el["times"][-1] for el in chunked_token_times]
         gen_steps = [el["steps"] for el in chunked_token_times]
         chunk_sizes = [len(el["times"]) for el in chunked_token_times]
 
-        total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(texts, k_chunks)
+        total_frame, frame_rate, spk_times, tts_times = self.get_audio_track(texts)
 
         audio = {
             "frame": total_frame,

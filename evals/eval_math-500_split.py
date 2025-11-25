@@ -31,26 +31,22 @@ def parse_args():
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
     parser.add_argument("--split-from", type=int, required=True, help="Split of math-500 from:")
     parser.add_argument("--split-to", type=int, required=True, help="Split of math-500 :to")
-    parser.add_argument("--budget", type=int, default=1024, help="Budget to eval on")
-    parser.add_argument("--use-slow-kernel", action="store_false", default=True, help="Disable fast kernel")
+    parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
+    parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
+    parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
-    parser.add_argument("--log-each-sample", action="store_true", default=False, help="Enables storing of each sample result")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    print("Args:", *[f"{k}: {v}" for k, v in vars(args).items()], sep="\n")
+
     mode = args.mode
     split_from, split_to = args.split_from, args.split_to
     use_fast_kernel = not args.use_slow_kernel
-    use_api_not_local = True # TODO make flag
-    log_each_sample = args.log_each_sample
-    # TODO better asserts for args combinations
-
-    def flush_json_log(path: str, obj):
-        with open(path, "w") as f:
-            json.dump(result, f, indent=2)
-
+    use_api_not_local = not args.use_local_judge
+    assert use_api_not_local or not use_fast_kernel, "You cannot use local model with kernel as a judge"
 
     print("CUDA_VISIBLE_DEVICES:", os.environ["CUDA_VISIBLE_DEVICES"])
     print("HF_HOME:", os.environ["HF_HOME"])
@@ -95,70 +91,38 @@ def main():
         if idx < split_from or idx >= split_to:
             continue
             
-        result = {
-            "idx": idx,
-            "is_equal": None,
-            "metrics": None,
-            "eos_generated": None,
-            "response_answers": None,
-            "correct_answer": answer,
-            "writer_response": None,
-            "thinker_response": None,
-            "error": None,
-        }
         problem = f"{instruction}. Please provide the final answer in \\boxed{{ }}"
 
-        try:
-            writer_output_str, thinker_output_str, token_times, eos_generated = \
-                solver.solve(problem, budget=args.budget)
-            response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
-        except Exception as e:
-            msg = f"Exception during GENERATION on sample {idx}: {str(e)}"
-            logger.error(msg)
-            result.update({"error": msg})
-            measured_delays_over_dataset.append(result)
-            flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
-            continue
-
-        result.update({
-            "eos_generated": eos_generated,
-            "response_answers": response,
-            "writer_response": writer_output_str,
-            "thinker_response": thinker_output_str,
-        })
-        
-        try:
-            if use_api_not_local:
-                is_equal = check_equality_judge(response, answer)
-            else:
-                is_equal = check_equality_local_model(response, answer)
-        except Exception as e:
-            msg = f"Exception during CHECKING ANSWER on sample {idx}: {str(e)}"
-            logger.error(msg)
-            result.update({"error": msg})
-            measured_delays_over_dataset.append(result)
-            flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
-            continue
-
-        result.update({"is_equal": is_equal})
+        writer_output_str, thinker_output_str, token_times, eos_generated = \
+            solver.solve(problem, budget=args.budget)
+        response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
+    
+        if use_api_not_local:
+            is_equal = check_equality_judge(response, answer)
+        else:
+            is_equal = check_equality_local_model(response, answer)
 
         if not token_times:
+            # If writer output is empty
             metrics = None
         else:
-            try:
-                chunks, audio = evaluator.get_chunks_with_tts(token_times, k_chunks=5, return_audio=True)
-                metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
-            except Exception as e:
-                msg = f"Exception during TTS on sample {idx}: {str(e)}"
-                logger.error(msg)
-                result.update({"error": msg})
-                measured_delays_over_dataset.append(result)
-                flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
-                continue
+            chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
+            metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
 
-        result.update({"metrics": metrics})
+        result = {
+            "idx": idx,
+            "is_equal": is_equal,
+            "metrics": metrics,
+            "token_times": token_times,
+            "eos_generated": eos_generated,
+            "response_answers": response,
+            "correct_answer": answer,
+            "writer_response": writer_output_str,
+            "thinker_response": thinker_output_str,
+        }
         measured_delays_over_dataset.append(result)
-        flush_json_log(f"{exp_dir_path}/sample_{idx}.json", result)
+        with open(f"{exp_dir_path}/sample_{idx}.json", "w") as f:
+            json.dump(result, f, indent=2)
 
         print(f'>>> {eos_generated=}, Total delay: {metrics["total_delay"] if metrics else None}')
     with open(f"{exp_dir_path}/all_results.pkl", "wb") as f:

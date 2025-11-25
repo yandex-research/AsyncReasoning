@@ -174,6 +174,7 @@ class TextToSpeech:
     """
     Main entry point into Tortoise.
     """
+    sample_rate = 24000
 
     def __init__(self, autoregressive_batch_size=None, models_dir=MODELS_DIR, 
                  enable_redaction=True, kv_cache=False, use_deepspeed=False, half=False, device=None,
@@ -315,9 +316,16 @@ class TextToSpeech:
     
         return wav_chunk, wav_gen_prev, wav_overlap
 
+    def tts(self, text: str, *args, **kwargs):
+        """
+        :param text: Text to be spoken
+        all other parameters can be found in tts_from_tokens (below)
+        """
+        for chunk_token_ids in self.tokenizer.encode_chunks(text, max_chunk_tokens=398): # max_chunk_tokens=398 -- < 400 from assert and there is -1 from padding token
+            yield from self.tts_from_tokens(chunk_token_ids, *args, **kwargs)
 
-
-    def tts(self, text, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
+    @torch.inference_mode()
+    def tts_from_tokens(self, text_tokens, voice_samples=None, conditioning_latents=None, k=1, verbose=True, use_deterministic_seed=None,
             return_deterministic_state=False, overlap_wav_len=1024, stream_chunk_size=40,
             # autoregressive generation parameters follow
             num_autoregressive_samples=512, temperature=.8, length_penalty=1, repetition_penalty=2.0, top_p=.8, max_mel_tokens=500,
@@ -328,7 +336,7 @@ class TextToSpeech:
             **hf_generate_kwargs):
         """
         Produces an audio clip of the given text being spoken with the given reference voice.
-        :param text: Text to be spoken.
+        :param text_tokens: Text to be spoken, tokenized by self.tokenizer.
         :param voice_samples: List of 2 or more ~10 second reference clips which should be torch tensors containing 22.05kHz waveform data.
         :param conditioning_latents: A tuple of (autoregressive_conditioning_latent, diffusion_conditioning_latent), which
                                      can be provided in lieu of voice_samples. This is ignored unless voice_samples=None.
@@ -366,9 +374,9 @@ class TextToSpeech:
         """
         deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
 
-        text_tokens = torch.IntTensor(self.tokenizer.encode(text)).unsqueeze(0).to(self.device)
+        text_tokens = torch.IntTensor(text_tokens).unsqueeze(0).to(self.device)
         text_tokens = F.pad(text_tokens, (0, 1))  # This may not be necessary.
-        assert text_tokens.shape[-1] < 400, 'Too much text provided. Break the text up into separate segments and re-try inference.'
+        assert text_tokens.shape[-1] < 400, f'Too much text provided ({text_tokens.shape[-1]}). Break the text up into separate segments and re-try inference.'
         if voice_samples is not None:
             auto_conditioning = self.get_conditioning_latents(voice_samples, return_mels=False)
         else:
