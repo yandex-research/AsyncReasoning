@@ -239,7 +239,7 @@ class TTSEvaluator:
             t0 = time.perf_counter()
             spk_time = 0
             for j, text_chunk in enumerate(list(filter(lambda x: x.strip() != "", text.split("\n")))):
-                frame = np.concatenate([
+                audio_frames = [
                     audio_frame.cpu().numpy() for audio_frame in self.tts.tts_with_preset(
                         text_chunk,
                         voice_samples=voice_samples,
@@ -249,7 +249,8 @@ class TTSEvaluator:
                         verbose=False,
                         overlap_wav_len=1, # This is not the best way to do that!
                     )
-                ], axis=0)
+                ]
+                frame = np.concatenate(audio_frames, axis=0) if audio_frames else np.array([])
                 
                 spk_time += len(frame) / self.tts.sample_rate
                 frames.append(frame)
@@ -257,7 +258,7 @@ class TTSEvaluator:
             t1 = time.perf_counter()
             tts_times.append(t1 - t0)
             spk_times.append(spk_time)
-        total_frame = np.concatenate(frames, axis=0)
+        total_frame = np.concatenate(frames, axis=0) if frames else np.array([])
         return total_frame, self.tts.sample_rate, spk_times, tts_times
 
     @staticmethod
