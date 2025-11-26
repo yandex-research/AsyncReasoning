@@ -37,7 +37,8 @@ class BaselineSolver:
     
     def forward_hook(self, model, _unused_args, output, **_unused_kwargs):
         assert not _unused_args and not _unused_kwargs
-        assert not self.eos_generated, "We should not be here"
+        if self.eos_generated: # do not do anything after eos was generated
+            return
         next_token = int(output.logits.argmax(-1))
         if not self.in_thinking_mode:
             token_times_item = (self.tokenizer.decode(next_token), time.perf_counter() - self.starting_time, self.current_step)
