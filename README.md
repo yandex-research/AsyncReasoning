@@ -9,7 +9,7 @@
 npm init -y
 npm install speech-rule-engine
 ```
-3. Rune `demo_eval.ipynb`
+3. Run [`./notebooks/demo_simple.ipynb`](./notebooks/demo_simple.ipynb)
 
 Please make sure that it works for you!
 

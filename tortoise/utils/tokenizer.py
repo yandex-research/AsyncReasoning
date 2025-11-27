@@ -8,6 +8,8 @@ from tokenizers import Tokenizer
 
 # Regular expression matching whitespace:
 from unidecode import unidecode
+from typing import List, Sequence
+
 
 _whitespace_re = re.compile(r'\s+')
 
@@ -174,6 +176,7 @@ class VoiceBpeTokenizer:
         self.tokenizer = Tokenizer.from_file(
           DEFAULT_VOCAB_FILE if vocab_file is None else vocab_file
         )
+        self.space_token_index = self.tokenizer.get_vocab()["[SPACE]"]
         if use_basic_cleaners:
             self.preprocess_text = basic_cleaners
         else:
@@ -184,6 +187,11 @@ class VoiceBpeTokenizer:
         txt = txt.replace(' ', '[SPACE]')
         return self.tokenizer.encode(txt).ids
 
+    def encode_chunks(self, txt: str, max_chunk_tokens: int) -> Sequence[Sequence[int]]:
+        return split_ids_on_spaces(
+          self.encode(txt), space_token_index=self.space_token_index, max_chunk_length=max_chunk_tokens)
+        
+
     def decode(self, seq):
         if isinstance(seq, torch.Tensor):
             seq = seq.cpu().numpy()
@@ -192,3 +200,100 @@ class VoiceBpeTokenizer:
         txt = txt.replace('[STOP]', '')
         txt = txt.replace('[UNK]', '')
         return txt
+
+
+def split_ids_on_spaces(
+    ids: List[int],
+    space_token_index: int,
+    max_chunk_length: int,
+) -> List[List[int]]:
+    """
+    WARNING: VIBE-CODED
+    Split a sequence of ids into contiguous chunks of up to max_chunk_length.
+
+    Chunks are split on space_token_index whenever possible and every chunk
+    except the last ideally ends with space_token_index. If a contiguous span
+    has no space_token_index and is longer than max_chunk_length, it is split
+    evenly over arbitrary positions (this is the only case where non-space
+    splits are allowed).
+    """
+    if max_chunk_length <= 0:
+        raise ValueError("max_chunk_length must be positive")
+
+    n = len(ids)
+    if n == 0:
+        return []
+
+    spaces = [i for i, t in enumerate(ids) if t == space_token_index]
+    result: List[List[int]] = []
+    prev_idx = -1  # last index included in previous chunk
+    space_pos = 0  # pointer into spaces list
+
+    while prev_idx < n - 1:
+        max_end = min(prev_idx + max_chunk_length, n - 1)
+
+        # Advance to first space strictly after prev_idx.
+        while space_pos < len(spaces) and spaces[space_pos] <= prev_idx:
+            space_pos += 1
+
+        # Try to end the chunk at the last space within (prev_idx, max_end].
+        last_space = None
+        j = space_pos
+        while j < len(spaces) and spaces[j] <= max_end:
+            last_space = spaces[j]
+            j += 1
+
+        if last_space is not None:
+            start = prev_idx + 1
+            end = last_space
+            result.append(ids[start : end + 1])
+            prev_idx = end
+            space_pos = j
+            continue
+
+        # No space within the allowed window.
+        next_space = spaces[space_pos] if space_pos < len(spaces) else None
+
+        if next_space is None:
+            # Remaining tail has no spaces at all.
+            tail_start = prev_idx + 1
+            tail_len = n - tail_start
+
+            if tail_len <= max_chunk_length:
+                result.append(ids[tail_start:])
+                break
+
+            # Split the tail evenly into k chunks, all <= max_chunk_length.
+            k = (tail_len + max_chunk_length - 1) // max_chunk_length
+            base = tail_len // k
+            rem = tail_len % k
+            offset = tail_start
+            for i in range(k):
+                size = base + (1 if i < rem else 0)
+                result.append(ids[offset : offset + size])
+                offset += size
+            break
+
+        # There is a space further on, but it lies beyond max_chunk_length.
+        # The run [run_start, run_end) contains no spaces.
+        run_start = prev_idx + 1
+        run_end = next_space  # exclusive
+        run_len = run_end - run_start
+
+        if run_len <= max_chunk_length:
+            # Short run with no spaces; must be a non-space chunk.
+            result.append(ids[run_start:run_end])
+            prev_idx = run_end - 1
+        else:
+            # Long run with no spaces: split evenly, ignoring space boundaries.
+            k = (run_len + max_chunk_length - 1) // max_chunk_length
+            base = run_len // k
+            rem = run_len % k
+            offset = run_start
+            for i in range(k):
+                size = base + (1 if i < rem else 0)
+                result.append(ids[offset : offset + size])
+                offset += size
+            prev_idx = run_end - 1
+
+    return result
