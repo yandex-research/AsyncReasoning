@@ -11,6 +11,8 @@ npm install speech-rule-engine
 ```
 3. Run [`./notebooks/demo_simple.ipynb`](./notebooks/demo_simple.ipynb)
 
+4. More detailed notebook for prototyping: [`./notebooks/demo_async_thoughts.ipynb`](./notebooks/demo_async_thoughts.ipynb)
+
 Please make sure that it works for you!
 
 ## How to run MATH500 eval
