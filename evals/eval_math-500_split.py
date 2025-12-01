@@ -100,7 +100,7 @@ def main():
         if use_api_not_local:
             is_equal = check_equality_judge(response, answer)
         else:
-            is_equal = check_equality_local_model(response, answer)
+            is_equal = check_equality_local_model(model, tokenizer, response, answer)
 
         if not token_times:
             # If writer output is empty
