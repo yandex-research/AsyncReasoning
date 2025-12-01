@@ -13,6 +13,10 @@ npm install speech-rule-engine
 
 Please make sure that it works for you!
 
+## How to run MATH500 eval
+
+`python -m evals.eval_math-500_split --split-from 0 --split-to 500 --use-slow-kernel --budget 16384 --mode async_reasoning`
+
 ## The contents of the `./tortoise` Folder
 
 The code contained in the `./tortoise` directory is **not authored by this project’s maintainers**. It is a replica of the open-source [[Tortoise TTS](https://github.com/neonbjb/tortoise-tts)](https://github.com/neonbjb/tortoise-tts) project by **neonbjb**, which is licensed under the [[Apache License 2.0](https://github.com/neonbjb/tortoise-tts/blob/main/LICENSE)](https://github.com/neonbjb/tortoise-tts/blob/main/LICENSE). See [(Betker et al, 2023)](https://arxiv.org/abs/2305.07243) for their technical report.
