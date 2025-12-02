@@ -90,8 +90,8 @@ def main():
         )):
         if idx < split_from or idx >= split_to:
             continue
-            
-        problem = f"{instruction}. Please provide the final answer in \\boxed{{ }}"
+        
+        problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)
