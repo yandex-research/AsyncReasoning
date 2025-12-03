@@ -17,6 +17,8 @@ class AsyncReasoningSolver:
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
         forbidden_token_ix: Sequence[int] = [],
+        thinker_forbidden_token_ix: Sequence[int] = [],
+        writer_forbidden_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True
     ):
         if use_fast_kernel:
@@ -26,12 +28,16 @@ class AsyncReasoningSolver:
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
+        if forbidden_token_ix:
+            assert not (thinker_forbidden_token_ix or writer_forbidden_token_ix)
+            thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
+            warnings.warn("forbidden_token_ix is deprecated, use separate thinker_/writer_forbidden_token_ix")
 
         self.model = model
         self.device = model.device
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
-        self.forbidden_token_ix = forbidden_token_ix
+        self.thinker_forbidden_token_ix, self.writer_forbidden_token_ix = thinker_forbidden_token_ix, writer_forbidden_token_ix
         self.use_fast_kernel = use_fast_kernel
 
     @torch.inference_mode()
@@ -52,10 +58,7 @@ class AsyncReasoningSolver:
             next_inputs = self.tokenizer(prompting.thinker_control_question, **self.tokenizer_kwargs).to(self.device)
 
         logits = self.model(**cache.cm_thinker_control.get_input_kwargs(**next_inputs)).logits[..., -1, :]
-        logits[..., self.forbidden_token_ix] -= 100
-        
-        probs = logits.softmax(-1)  # TODO support more yes/no variants
-        # Remove spaces
+        probs = logits.softmax(-1)
         yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
         no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
         
@@ -100,7 +103,7 @@ class AsyncReasoningSolver:
                 if cache.state == State.thinker_only:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=self.device)}
                     logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
-                    logits[..., self.forbidden_token_ix] -= 100
+                    logits[..., self.thinker_forbidden_token_ix] -= 100
                     thinker_output_tokens.append(int(logits.argmax(-1)))
 
                 elif cache.state == State.thinker_and_writer:
@@ -108,7 +111,8 @@ class AsyncReasoningSolver:
                     input_kwargs = cache.get_input_kwargs(**next_inputs)
                     logger.debug(f"input_kwargs: {input_kwargs}")
                     logits = self.model(**input_kwargs).logits[..., -1, :]
-                    logits[..., self.forbidden_token_ix] -= 100
+                    logits[0, ..., self.writer_forbidden_token_ix] -= 100
+                    logits[1, ..., self.thinker_forbidden_token_ix] -= 100
                     writer_next_token, thinker_next_token = logits.argmax(-1)
                     writer_output_tokens.append(int(writer_next_token))
                     thinker_output_tokens.append(int(thinker_next_token))

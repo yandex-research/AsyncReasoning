@@ -64,9 +64,12 @@ def main():
     solver_kwargs = {}
     if mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
-        forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
+        system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
+        writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
+        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
         solver_kwargs.update({
-            "forbidden_token_ix": forbidden_token_ix,
+            "writer_forbidden_token_ix": writer_forbidden_token_ix,
+            "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
         })
     elif mode in ["baseline_think", "baseline_no_think"]:
