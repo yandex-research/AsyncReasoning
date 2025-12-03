@@ -6,6 +6,10 @@
 1. Update env with newer `./requirements.txt`
 2. Install speech-rule-engine (node package) current directory (`.`):
 ```
+# if required: install nodejs >=20.x
+# curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# sudo apt install -y nodejs
+
 npm init -y
 npm install speech-rule-engine
 ```
