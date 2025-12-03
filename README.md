@@ -4,7 +4,7 @@
 ## How to run eval demo:
 (The idea is to unify requirements for both hogwild and tts)
 1. Update env with newer `./requirements.txt`
-2. Install speech-rule-engine (node package) current directory (`.`):
+2. Install speech-rule-engine (nodejs package, requires node >=14.6) in current directory (`.`):
 ```
 npm init -y
 npm install speech-rule-engine
