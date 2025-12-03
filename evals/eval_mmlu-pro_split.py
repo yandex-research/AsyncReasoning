@@ -1,23 +1,23 @@
 import os
-from pathlib import Path
+import json
+import pickle
+import logging
 import argparse
+
 import torch
 import transformers
+from tqdm import tqdm
+from datasets import load_dataset
 
 from evals.tts_evaluator import TTSEvaluator
-
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 
-from datasets import load_dataset
-from tqdm import tqdm
-import pickle
-import json
-
-import traceback
-
-import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo_split.log', encoding='utf-8', level=logging.DEBUG)
+
+
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -29,12 +29,14 @@ def parse_args():
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument("--split-from", type=int, required=True, help="Split of math-500 from:")
-    parser.add_argument("--split-to", type=int, required=True, help="Split of math-500 :to")
+    parser.add_argument("--num-samples", type=int, required=True, help="The size of subset used for evaluation")
+    parser.add_argument("--split-from", type=int, required=True, help="Split of mmlu-pro from:")
+    parser.add_argument("--split-to", type=int, required=True, help="Split of mmlu-pro :to")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used for subset sampling")
     return parser.parse_args()
 
 
@@ -64,12 +66,9 @@ def main():
     solver_kwargs = {}
     if mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
-        system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
-        writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
-        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
+        forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
         solver_kwargs.update({
-            "writer_forbidden_token_ix": writer_forbidden_token_ix,
-            "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
+            "forbidden_token_ix": forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
         })
     elif mode in ["baseline_think", "baseline_no_think"]:
@@ -81,20 +80,34 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_dataset('HuggingFaceH4/MATH-500')
+    dataset_mmlu = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
+    dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
 
-    exp_dir_path = f"{args.path_to_results}/{mode}_math-500_split_{split_from}-{split_to}"
+    exp_dir_path = f"{args.path_to_results}/{mode}_mmlu-pro_split_{split_from}-{split_to}"
     os.makedirs(exp_dir_path, exist_ok=True)
 
     measured_delays_over_dataset = []
     evaluator = TTSEvaluator()
-    for idx, (instruction, answer) in tqdm(enumerate(
-            zip(dataset_math["test"]["problem"], dataset_math["test"]["answer"])
-        )):
+    for idx, sample in tqdm(enumerate(dataset_mmlu)):
         if idx < split_from or idx >= split_to:
             continue
-        
-        problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
+
+        num_options = len(sample["options"])
+        question = sample["question"].strip('\n')
+        answer = sample["answer"]
+
+        system_prompt = (
+            "Please reason step by step, and put your final answer within \\boxed{} "
+            f"using ONLY the letter ({', '.join(ALPHABET[:num_options])}). Your final boxed answer must "
+            "contain exactly one letter and nothing else.\n\n"
+        )
+
+        problem = (
+            system_prompt +
+            f"Question: {question}\n\n"
+            f"Choices:\n"
+            "\n".join([f"({ALPHABET[i]}) {option}" for i, option in enumerate(sample['options'])])
+        )
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)

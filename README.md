@@ -11,7 +11,13 @@ npm install speech-rule-engine
 ```
 3. Run [`./notebooks/demo_simple.ipynb`](./notebooks/demo_simple.ipynb)
 
+4. More detailed notebook for prototyping: [`./notebooks/demo_async_thoughts.ipynb`](./notebooks/demo_async_thoughts.ipynb)
+
 Please make sure that it works for you!
+
+## How to run MATH500 eval
+
+`python -m evals.eval_math-500_split --split-from 0 --split-to 500 --use-slow-kernel --budget 16384 --mode async_reasoning`
 
 ## The contents of the `./tortoise` Folder
 

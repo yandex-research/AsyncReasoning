@@ -1,23 +1,24 @@
 import os
-from pathlib import Path
+import json
+import pickle
+import random
+import logging
 import argparse
+
 import torch
 import transformers
+from tqdm import tqdm
+from datasets import load_dataset
 
 from evals.tts_evaluator import TTSEvaluator
-
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 
-from datasets import load_dataset
-from tqdm import tqdm
-import pickle
-import json
-
-import traceback
-
-import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo_split.log', encoding='utf-8', level=logging.DEBUG)
+
+# GPQA has a Correct Answer and 3 incorrect options
+CHOICES = ["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"]
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -29,12 +30,13 @@ def parse_args():
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument("--split-from", type=int, required=True, help="Split of math-500 from:")
-    parser.add_argument("--split-to", type=int, required=True, help="Split of math-500 :to")
+    parser.add_argument("--split-from", type=int, required=True, help="Split of mmlu-pro from:")
+    parser.add_argument("--split-to", type=int, required=True, help="Split of mmlu-pro :to")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used for option shuffling")
     return parser.parse_args()
 
 
@@ -64,12 +66,9 @@ def main():
     solver_kwargs = {}
     if mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
-        system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
-        writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
-        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
+        forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
         solver_kwargs.update({
-            "writer_forbidden_token_ix": writer_forbidden_token_ix,
-            "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
+            "forbidden_token_ix": forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
         })
     elif mode in ["baseline_think", "baseline_no_think"]:
@@ -81,20 +80,41 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_dataset('HuggingFaceH4/MATH-500')
+    dataset_gpqa = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
 
-    exp_dir_path = f"{args.path_to_results}/{mode}_math-500_split_{split_from}-{split_to}"
+    exp_dir_path = f"{args.path_to_results}/{mode}_mmlu-pro_split_{split_from}-{split_to}"
     os.makedirs(exp_dir_path, exist_ok=True)
 
     measured_delays_over_dataset = []
     evaluator = TTSEvaluator()
-    for idx, (instruction, answer) in tqdm(enumerate(
-            zip(dataset_math["test"]["problem"], dataset_math["test"]["answer"])
-        )):
+    for idx, sample in tqdm(enumerate(dataset_gpqa)):
         if idx < split_from or idx >= split_to:
             continue
-        
-        problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
+
+        system_prompt = (
+            "Please reason step by step, and put your final answer within \\boxed{} "
+            "using ONLY the letter (A, B, C, or D). Your final boxed answer must "
+            "contain exactly one letter and nothing else.\n\n"
+        )
+
+        # We permute the choices to circumvent the potential position bias
+        choices_order = [0, 1, 2, 3]
+        # Without updating the seed, choices_order is fixed
+        random.seed(args.seed + idx)
+        random.shuffle(choices_order)
+        choices = [CHOICES[i] for i in choices_order]
+        gt_id = choices_order.index(0)
+        answer = ["A", "B", "C", "D"][gt_id]
+
+        problem = (
+            system_prompt +
+            f"Question: {sample['Question'].strip()}\n\n"
+            f"Choices:\n"
+            f"(A) {sample[choices[0]].strip()}\n"
+            f"(B) {sample[choices[1]].strip()}\n"
+            f"(C) {sample[choices[2]].strip()}\n"
+            f"(D) {sample[choices[3]].strip()}"
+        )
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)
