@@ -81,7 +81,7 @@ def main():
 
     solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_mmlu = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
-    dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
+    dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(split_from, split_to))
 
     exp_dir_path = f"{args.path_to_results}/{mode}_mmlu-pro_split_{split_from}-{split_to}"
     os.makedirs(exp_dir_path, exist_ok=True)
