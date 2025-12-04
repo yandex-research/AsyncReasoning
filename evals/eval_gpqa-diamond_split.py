@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
-    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
+    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/gpqa-diamond")
     parser.add_argument("--seed", type=int, default=42, help="Random seed used for option shuffling")
     return parser.parse_args()
 
