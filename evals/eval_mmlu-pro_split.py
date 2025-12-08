@@ -30,7 +30,7 @@ def parse_args():
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
     parser.add_argument("--num-samples", type=int, required=True, help="The size of subset used for evaluation")
-    parser.add_argument("--split-from", type=int, required=True, help="Split of mmlu-pro from:") # TODO: rename to start/end/queue as in math500
+    parser.add_argument("--split-from", type=int, required=True, help="Split of mmlu-pro from:")
     parser.add_argument("--split-to", type=int, required=True, help="Split of mmlu-pro :to")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
