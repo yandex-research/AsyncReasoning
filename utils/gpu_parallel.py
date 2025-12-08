@@ -6,7 +6,7 @@ import os
 import logging
 import time
 
-from utils.task_queue import TaskQueue
+from .task_queue import TaskQueue
 
 
 def parse_args():
