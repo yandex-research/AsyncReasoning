@@ -1,5 +1,4 @@
-import sys; sys.path.insert(0, __file__.rsplit("/", 1)[0] + "/..")
-print(sys.path)
+import sys; sys.path.insert(0, __file__.rsplit("/", 2)[0])
 
 import os
 import json
