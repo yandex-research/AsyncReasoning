@@ -95,6 +95,9 @@ def main():
     evaluator = TTSEvaluator()
 
     def _solve_task_and_save(idx: int):
+        save_path = f"{exp_dir_path}/sample_{idx}.json"
+        if os.path.exists(save_path):  return  # already solved by previous run and saved in snapshot
+
         nonlocal accuracy_numerator, accuracy_denominator
         instruction = str(dataset_math[idx]['problem'])
         answer = str(dataset_math[idx]['answer'])
@@ -125,13 +128,11 @@ def main():
             "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
         }
-
-
         accuracy_numerator += int(is_equal)
         accuracy_denominator += 1
         current_accuracy = (accuracy_numerator / accuracy_denominator)
         logger.info(f'>>> {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}')
-        with open(f"{exp_dir_path}/sample_{idx}.json", "w") as f:
+        with open(save_path, "w") as f:
             json.dump(result, f, indent=2)
         if "NV_YT_OPERATION_ID" in os.environ and rank == 0 and (
                 accuracy_denominator % args.dump_snapshot_freq == args.dump_snapshot_freq - 1):
