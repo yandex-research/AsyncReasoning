@@ -9,9 +9,9 @@ import transformers
 from datasets import load_dataset
 
 from tts_evaluator import TTSEvaluator
-from task_queue import TaskQueue
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
+from utils.task_queue import TaskQueue
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
