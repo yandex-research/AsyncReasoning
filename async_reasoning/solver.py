@@ -3,7 +3,7 @@ import torch
 import warnings
 import transformers
 from IPython.display import display, Markdown, clear_output
-from typing import Sequence, Union, Tuple, Dict, Any
+from typing import Sequence, Union, Callable, Optional
 
 from async_reasoning.prompting import AsyncReasoningPrompting
 from async_reasoning.cache import State, AsyncReasoningCache
@@ -81,12 +81,19 @@ class AsyncReasoningSolver:
         last_two_tokens = self.tokenizer.decode(seq[-2:])
         return last_two_tokens.endswith("\n\n")
 
-    def solve(self,
-            problem: str,
-            display_generation_in_real_time: bool = False,
-            budget: int = 1024,
-        ):
-        
+    def solve(
+        self,
+        problem: str,
+        display_generation_in_real_time: bool = False,
+        budget: int = 1024,
+        on_new_tokens_generated: Optional[
+            Callable[
+                [Sequence[int], Sequence[int], tuple[str, float, int], bool, State],
+                None,
+            ]
+        ] = None,
+    ):
+
         prompting = AsyncReasoningPrompting(problem)
 
         token_times = []
@@ -129,6 +136,17 @@ class AsyncReasoningSolver:
                     self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)
                 if writer_output_tokens[-1] == self.tokenizer.eos_token_id:
                     eos_generated = True
+
+                if on_new_tokens_generated is not None:
+                    on_new_tokens_generated(
+                        writer_output_tokens,
+                        thinker_output_tokens,
+                        token_times,
+                        eos_generated,
+                        cache.state,
+                    )
+
+                if eos_generated:
                     break
             else:  # ran out of budget
                 if len(token_times) == 0:

@@ -1,0 +1,120 @@
+<div id="audio-interface-{{ unique_id }}">
+    <button id="recordButton-{{ unique_id }}">Stop Recording</button>
+    <p id="status-{{ unique_id }}">Status: Idle</p>
+</div>
+<script>
+(function() {
+    const uniqueId = "{{ unique_id }}";
+    const statusDisplay = document.getElementById('status-' + uniqueId);
+    const recordButton = document.getElementById('recordButton-' + uniqueId);
+    const targetInputSelector = ".{{ css_class_receiver }} input";
+
+    var recorder;
+    var dataSent = false;
+
+    function resetUIOnError(errorMessage) {
+       statusDisplay.textContent = "Status: Error - " + errorMessage;
+       recordButton.disabled = true;
+    }
+
+    function setupMicrophone() {
+        statusDisplay.textContent = "Status: Requesting microphone...";
+        recordButton.disabled = true;
+        navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(handleSuccess)
+            .catch(function(err) {
+                resetUIOnError("Microphone Error: " + err.name);
+                sendDataToPython("error:" + err.name)
+        });
+    }
+
+    function handleSuccess(stream) {
+        const options = { mimeType: 'audio/webm;codecs=opus' };
+        try {
+           recorder = new MediaRecorder(stream, options);
+        } catch (e) {
+           try {
+              recorder = new MediaRecorder(stream);
+           } catch (e2) {
+              resetUIOnError("MediaRecorder creation failed.");
+              sendDataToPython("error:" + e2.name)
+              return;
+           }
+        }
+
+        statusDisplay.textContent = "Status: Recording...";
+        recordButton.disabled = false;
+
+        recorder.ondataavailable = function(e) {
+            if (e.data.size > 0) {
+                statusDisplay.textContent = "Status: Recording done, sending data to Python...";
+                var url = URL.createObjectURL(e.data);
+
+                var reader = new FileReader();
+                var isError = false;
+                reader.onerror = function(event) {
+                   sendDataToPython("error:" + event.errorMessage)
+                   isError = true;
+                };
+                reader.onloadend = function() {
+                    if (!isError) {
+                       sendDataToPython(reader.result);
+                    }
+                };
+                reader.readAsDataURL(e.data);
+            }
+        };
+
+        recorder.onerror = function(event) {
+           resetUIOnError("Recorder Error: " + event.error.name);
+           sendDataToPython("error:" + event.error.name);
+        };
+
+        try {
+           recorder.start();
+        } catch (e) {
+           resetUIOnError("Failed to start recorder.");
+           sendDataToPython("error:" + e.name);
+        }
+    }
+
+    function sendDataToPython(b64Data) {
+        if (dataSent) {
+            return;
+        }
+        dataSent = true;
+
+        if (!b64Data || typeof b64Data !== 'string' || (!b64Data.startsWith('data:') && !b64Data.startsWith('error:'))) {
+            resetUIOnError("Invalid data captured: " + b64Data);
+            return;
+        }
+        const targetInput = document.querySelector(targetInputSelector);
+        if (targetInput) {
+            try {
+                targetInput.value = b64Data;
+                targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+                targetInput.dispatchEvent(new Event('change', { bubbles: true }));
+                if (!b64Data.startsWith('error:')) {
+                    statusDisplay.textContent = "Status: Audio sent to Python for processing.";
+                }
+            } catch(e) {
+                resetUIOnError("Failed to send data to Python.");
+            }
+        } else {
+            resetUIOnError("Could not communicate with Python backend.");
+        }
+    }
+
+    recordButton.onclick = function() {
+        try {
+            recorder.stop();
+            statusDisplay.textContent = "Status: recording stopped.";
+            recordButton.disabled = true;
+        } catch(e) {
+            resetUIOnError("Failed to execute stop command: " + e.name);
+            sendDataToPython("error:" + e.name);
+        }
+    };
+    setupMicrophone();
+})();
+</script>
