@@ -1,23 +1,23 @@
 import os
-from pathlib import Path
 import argparse
 import torch
 import transformers
 
 from evals.tts_evaluator import TTSEvaluator
+from task_queue import TaskQueue
 
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 
 from datasets import load_dataset
 from tqdm import tqdm
-import pickle
 import json
 
-import traceback
+from gpu_parallel import get_worker_rank, init_worker_logger
+import sys; sys.path.insert(0, "../utils"); sys.path.insert(0, "../..")
 
-import logging
-logger = logging.getLogger(__name__)
-logging.basicConfig(filename='demo_split.log', encoding='utf-8', level=logging.DEBUG)
+if "NV_YT_OPERATION_ID" in os.environ:
+    import nirvana_dl
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -29,9 +29,24 @@ def parse_args():
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument("--split-from", type=int, required=True, help="Split of math-500 from:")
-    parser.add_argument("--split-to", type=int, required=True, help="Split of math-500 :to")
-    parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
+    parser.add_argument(
+        "--queue",
+        type=str,
+        default=None,
+        help="Endpoint for a zmq-like task dispenser that dispenses task indices. Provide *either* this or start & end"
+    )
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=None,
+        help="First task to be processed by script inclusive. E.g --start 0 --end 100 will process tasks [0-99]"
+    )
+    parser.add_argument(
+        "--end",
+        type=int,
+        default=None,
+        help="Last task to be processed by script exclusive. E.g --start 0 --end 100 will process tasks [0-99]"
+    )
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
@@ -40,20 +55,16 @@ def parse_args():
 
 def main():
     args = parse_args()
-    print("Args:", *[f"{k}: {v}" for k, v in vars(args).items()], sep="\n")
-
+    rank = get_worker_rank()
+    logger = init_worker_logger()
+    logger.info(f'The script was run in the following way:')
+    logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     mode = args.mode
     split_from, split_to = args.split_from, args.split_to
     use_fast_kernel = not args.use_slow_kernel
-    use_api_not_local = not args.use_local_judge
-    assert use_api_not_local or not use_fast_kernel, "You cannot use local model with kernel as a judge"
-
-    print("CUDA_VISIBLE_DEVICES:", os.environ["CUDA_VISIBLE_DEVICES"])
-    print("HF_HOME:", os.environ["HF_HOME"])
-    print("OMP_NUM_THREADS:", os.environ["OMP_NUM_THREADS"])
-    
+    assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
     model_name = args.model_name
-    assert model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"\
+    assert model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -81,37 +92,32 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_dataset('HuggingFaceH4/MATH-500')
-
+    dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
+    accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/{mode}_math-500_split_{split_from}-{split_to}"
     os.makedirs(exp_dir_path, exist_ok=True)
-
-    measured_delays_over_dataset = []
     evaluator = TTSEvaluator()
-    for idx, (instruction, answer) in tqdm(enumerate(
-            zip(dataset_math["test"]["problem"], dataset_math["test"]["answer"])
-        )):
-        if idx < split_from or idx >= split_to:
-            continue
-        
+
+    def _solve_task_and_save(idx: int):
+        nonlocal accuracy_numerator, accuracy_denominator
+        instruction = str(dataset_math[idx]['problem'])
+        answer = str(dataset_math[idx]['answer'])
+
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
-    
-        if use_api_not_local:
-            is_equal = check_equality_judge(response, answer)
-        else:
+        assert len(token_times) > 0
+
+        if args.use_local_judge :
             is_equal = check_equality_local_model(model, tokenizer, response, answer)
-
-        if not token_times:
-            # If writer output is empty
-            metrics = None
         else:
-            chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
-            metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
+            is_equal = check_equality_judge(response, answer)
 
+        chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
+        metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
+        total_delay = metrics["total_delay"]
         result = {
             "idx": idx,
             "is_equal": is_equal,
@@ -123,14 +129,30 @@ def main():
             "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
         }
-        measured_delays_over_dataset.append(result)
+
+
+        accuracy_numerator += int(is_equal)
+        accuracy_denominator += 1
+        current_accuracy = (accuracy_numerator / accuracy_denominator)
+        logger.info(f'>>> {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}')
         with open(f"{exp_dir_path}/sample_{idx}.json", "w") as f:
             json.dump(result, f, indent=2)
+        if "NV_YT_OPERATION_ID" in os.environ and rank == 0 and (
+                accuracy_denominator % args.dump_snapshot_freq == args.dump_snapshot_freq - 1):
+            nirvana_dl.snapshot.dump_snapshot()
+            logger.info("Dumped Nirvana snapshot")
 
-        print(f'>>> {eos_generated=}, Total delay: {metrics["total_delay"] if metrics else None}')
-    with open(f"{exp_dir_path}/all_results.pkl", "wb") as f:
-        pickle.dump(measured_delays_over_dataset, f)
-
+    if args.start is not None and args.end is not None:
+        logger.info(f'Generating tasks [{args.start}; {args.end})')
+        for idx in tqdm(range(args.start, args.end), desc=f'Process {rank}'):
+            _solve_task_and_save(idx)
+    elif args.queue is not None:
+        logger.info(f'Generating tasks from {args.queue}')
+        for idx in tqdm(TaskQueue.iterate_tasks_from_queue(endpoint=args.queue), desc=f"Process {rank}"):
+            _solve_task_and_save(idx)
+    else:
+        raise NotImplementedError("Please specify either --queue or both --start and --end")
+    logger.info(f'Process {rank} has finished.')
 
 if __name__ == "__main__":
     main()
