@@ -3,7 +3,7 @@ import argparse
 import torch
 import transformers
 
-from evals.tts_evaluator import TTSEvaluator
+from tts_evaluator import TTSEvaluator
 from task_queue import TaskQueue
 
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
