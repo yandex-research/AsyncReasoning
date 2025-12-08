@@ -90,7 +90,7 @@ def main():
     solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/{args.mode}_math500"
+    exp_dir_path = f"{args.path_to_results}/math500/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
