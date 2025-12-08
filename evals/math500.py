@@ -20,14 +20,6 @@ if "NV_YT_OPERATION_ID" in os.environ:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode",
-        type=str,
-        required=True,
-        choices=["async_reasoning", "baseline_think", "baseline_no_think"],
-        help="Select reasoning mode",
-    )
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument(
         "--queue",
         type=str,
         default=None,
@@ -45,6 +37,15 @@ def parse_args():
         default=None,
         help="Last task to be processed by script exclusive. E.g --start 0 --end 100 will process tasks [0-99]"
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=["async_reasoning", "baseline_think", "baseline_no_think"],
+        help="Select reasoning mode",
+    )
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
+    parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
