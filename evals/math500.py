@@ -58,8 +58,6 @@ def main():
     logger = init_worker_logger()
     logger.info(f'The script was run in the following way:')
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
-    mode = args.mode
-    split_from, split_to = args.split_from, args.split_to
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
     model_name = args.model_name
@@ -82,10 +80,10 @@ def main():
             "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
         })
-    elif mode in ["baseline_think", "baseline_no_think"]:
+    elif args.mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
-            "thinker_enabled": (mode == "baseline_think"),
+            "thinker_enabled": (args.mode == "baseline_think"),
         })
     else:
         raise ValueError("unsupported mode")
@@ -93,7 +91,7 @@ def main():
     solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/{mode}_math-500_split_{split_from}-{split_to}"
+    exp_dir_path = f"{args.path_to_results}/{args.mode}_math500"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
