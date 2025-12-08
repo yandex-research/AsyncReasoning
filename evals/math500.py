@@ -1,4 +1,4 @@
-import sys; sys.path.insert(0, "../utils"); sys.path.insert(0, "../..")
+import sys; sys.path.insert(0, "..")
 
 import os
 import json
@@ -10,11 +10,8 @@ from datasets import load_dataset
 
 from tts_evaluator import TTSEvaluator
 from task_queue import TaskQueue
-
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
-
-
-from gpu_parallel import get_worker_rank, init_worker_logger
+from utils.gpu_parallel import get_worker_rank, init_worker_logger
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
