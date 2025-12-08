@@ -1,4 +1,5 @@
 import sys; sys.path.insert(0, "..")
+print("PATH", sys.path)
 
 import os
 import json
