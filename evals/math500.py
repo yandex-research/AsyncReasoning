@@ -1,11 +1,14 @@
-import sys; sys.path.insert(0, __file__.rsplit("/", 2)[0]); sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
+import sys
+sys.path.insert(0, __file__.rsplit("/", 2)[0])
+sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
 import os
 import json
 import argparse
-from tqdm import tqdm
+
 import torch
 import transformers
+from tqdm import tqdm
 from datasets import load_dataset
 
 from tts_evaluator import TTSEvaluator
@@ -15,7 +18,6 @@ from utils.task_queue import TaskQueue
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
-
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -97,7 +99,8 @@ def main():
 
     def _solve_task_and_save(idx: int):
         save_path = f"{exp_dir_path}/sample_{idx}.json"
-        if os.path.exists(save_path):  return  # already solved by previous run and saved in snapshot
+        if os.path.exists(save_path):  
+            return  # already solved by previous run and saved in snapshot
 
         nonlocal accuracy_numerator, accuracy_denominator
         instruction = str(dataset_math[idx]['problem'])
@@ -110,7 +113,7 @@ def main():
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
 
-        if args.use_local_judge :
+        if args.use_local_judge:
             is_equal = check_equality_local_model(model, tokenizer, response, answer)
         else:
             is_equal = check_equality_judge(response, answer)
