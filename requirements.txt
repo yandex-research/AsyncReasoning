@@ -21,3 +21,5 @@ einops>=0.8.1
 progressbar>=2.5
 torchaudio>=2.8.0
 setuptools>=80.9.0
+rpyc==6.0.1
+
