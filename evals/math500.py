@@ -60,13 +60,12 @@ def main():
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
-    model_name = args.model_name
-    assert model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"
+    assert args.model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype='auto', device_map=device, low_cpu_mem_usage=True
+        args.model_name, torch_dtype='auto', device_map=device, low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}
