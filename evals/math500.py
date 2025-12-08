@@ -1,4 +1,4 @@
-import sys; sys.path.insert(0, __path__.rsplit("/", 1)[0] + "/..")
+import sys; sys.path.insert(0, __file__.rsplit("/", 1)[0] + "/..")
 print(sys.path)
 
 import os
