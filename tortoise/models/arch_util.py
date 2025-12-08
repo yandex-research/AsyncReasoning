@@ -311,7 +311,7 @@ class TorchMelSpectrogram(nn.Module):
                                                              norm="slaney")
         self.mel_norm_file = mel_norm_file
         if self.mel_norm_file is not None:
-            self.mel_norms = torch.load(self.mel_norm_file)
+            self.mel_norms = torch.load(self.mel_norm_file, weights_only=False)
         else:
             self.mel_norms = None
 

@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
-    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
+    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/gpqa-diamond")
     parser.add_argument("--seed", type=int, default=42, help="Random seed used for option shuffling")
     return parser.parse_args()
 
@@ -66,9 +66,12 @@ def main():
     solver_kwargs = {}
     if mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
-        forbidden_token_ix = [tokenizer.vocab[x] for x in ("</think>", "<|im_start|>", "SYSTEM")]
+        system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
+        writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
+        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
         solver_kwargs.update({
-            "forbidden_token_ix": forbidden_token_ix,
+            "writer_forbidden_token_ix": writer_forbidden_token_ix,
+            "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
         })
     elif mode in ["baseline_think", "baseline_no_think"]:
