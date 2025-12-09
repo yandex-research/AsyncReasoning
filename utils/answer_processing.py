@@ -78,6 +78,9 @@ def check_equality_judge(
     with open(f"{Path(__file__).resolve().parent}/eliza_config.json", "r") as f:
         config = json.loads("\n".join(f.readlines()))
     token, url, model = config["token"], config["url"], config["model"]
+    if not token:
+        with open(f"{Path(__file__).resolve().parent}/ELIZA_TOKEN", "r") as f:
+            token = f.readline()
     headers = {"Authorization": f"OAuth {token}"}
     messages=[{"role": "user", "content": prompt}]
     payload = {
