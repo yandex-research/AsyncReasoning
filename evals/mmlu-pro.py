@@ -108,7 +108,6 @@ def main():
     exp_dir_path = f"{args.path_to_results}/mmlu-pro/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
 
-    measured_delays_over_dataset = []
     evaluator = TTSEvaluator()
 
     def _solve_task_and_save(idx: int):
