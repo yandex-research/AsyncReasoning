@@ -38,7 +38,7 @@ Solve the following problem:
 <|im_start|>assistant""".strip()
 
         self.writer_split = " SYSTEM: [additional thoughts will appear here]\n</think>\n"
-        self.thinker_split = " SYSTEM: [the system will continute writing the response here]"
+        self.thinker_split = " SYSTEM: [the system will continue writing the response here]"
 
         # writer_output and thinker_output starts with these prefixes
         self.writer_output_prefix = f"""\n"""
