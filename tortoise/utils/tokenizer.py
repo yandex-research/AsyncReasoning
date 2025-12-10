@@ -50,6 +50,7 @@ _pounds_re = re.compile(r'£([0-9\,]*[0-9]+)')
 _dollars_re = re.compile(r'\$([0-9\.\,]*[0-9]+)')
 _ordinal_re = re.compile(r'[0-9]+(st|nd|rd|th)')
 _number_re = re.compile(r'[0-9]+')
+_over36digits_re = re.compile(r"\d{37,}")
 
 
 def _remove_commas(m):
@@ -84,15 +85,11 @@ def _expand_dollars(m):
 def _expand_ordinal(m):
   return _inflect.number_to_words(m.group(0))
 
-def _split_long_numbers(text):
-    def chunk(m):
-        s = m.group(0)
-        return " ".join(s[i:i+36] for i in range(0, len(s), 36))
-    return re.sub(r"\d{37,}", chunk, text)
-
+def _split_long_number(m):
+    s = m.group(0)
+    return " ".join(s[i:i+36] for i in range(0, len(s), 36))
 
 def _expand_number(m):
-  m = _split_long_numbers(m)
   num = int(m.group(0))
   if num > 1000 and num < 3000:
     if num == 2000:
@@ -113,6 +110,7 @@ def normalize_numbers(text):
   text = re.sub(_dollars_re, _expand_dollars, text)
   text = re.sub(_decimal_number_re, _expand_decimal_point, text)
   text = re.sub(_ordinal_re, _expand_ordinal, text)
+  text = re.sub(_over36digits_re, _split_long_number, text)
   text = re.sub(_number_re, _expand_number, text)
   return text
 
