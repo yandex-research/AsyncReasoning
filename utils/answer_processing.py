@@ -75,12 +75,12 @@ def check_equality_judge(
     ):
     prompt = EQUALITY_TEMPLATE % {"expression1": expr1, "expression2": expr2}
 
-    with open(f"{Path(__file__).resolve().parent}/eliza_config.json", "r") as f:
+    config_path = f"{Path(__file__).resolve().parent}/api_config.json"
+    with open(config_path, "r") as f:
         config = json.loads("\n".join(f.readlines()))
     token, url, model = config["token"], config["url"], config["model"]
     if not token:
-        with open(f"{Path(__file__).resolve().parent}/ELIZA_TOKEN", "r") as f:
-            token = f.readline()
+        raise Exception(f"Please specify your API token in {config_path}")
     headers = {"Authorization": f"OAuth {token}"}
     messages=[{"role": "user", "content": prompt}]
     payload = {
