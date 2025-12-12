@@ -1,6 +1,8 @@
 # AsyncReasoning
 
-Supplementary code for **[Asynchronous Reasoning: Training-Free Interactive Thinking LLMs (arXiv:2512.10931)](https://arxiv.org/abs/2512.10931)**.
+<a href='https://arxiv.org/abs/2512.10931'><img src='https://img.shields.io/badge/ArXiv-PDF-red' height="25"></a> &nbsp; 
+
+Supplementary code for **Asynchronous Reasoning: Training-Free Interactive Thinking LLMs**.
 
 More detailed instructions will be added shortly. However, you should be able to run the method itself with the current version.
 
