@@ -48,6 +48,7 @@ Notes:
 The results can be aggregated from the `json` files under `./eval_results` folder. For instance:
 ```bash
 cd ./eval_results/math500/async_reasoning
+python -c "import os, sys, json; fs=[fn for fn in os.listdir('.') if fn.endswith('.json')]; acc = sum(json.load(open(fn))['is_equal'] for fn in fs) / len(fs); print(f'{acc=:.5f}', file=sys.stderr)"
 python -c "import os, sys, json; fs=[fn for fn in os.listdir('.') if fn.endswith('.json')]; total_delay = sum(json.load(open(fn))['metrics']['total_delay'] for fn in fs) / len(fs); print(f'{total_delay=:.5f}', file=sys.stderr)"
 ```
 
