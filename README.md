@@ -1,6 +1,6 @@
 # AsyncReasoning
 
-This repository contains supplementary code for the paper **Asynchronous Reasoning: Training-Free Interactive Thinking LLMs.**
+Supplementary code for **[Asynchronous Reasoning: Training-Free Interactive Thinking LLMs (arXiv:2512.10931)](https://arxiv.org/abs/2512.10931)**.
 
 More detailed instructions will be added shortly. However, you should be able to run the method itself with the current version.
 
