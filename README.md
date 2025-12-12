@@ -1,6 +1,6 @@
 # AsyncReasoning
 
-This repository contains supplementary code for the paper **Asynchronous Reasoning: Training-Free Interactive Thinking LLMs**
+This repository contains supplementary code for the paper **Asynchronous Reasoning: Training-Free Interactive Thinking LLMs.**
 
 More detailed instructions will be added shortly. However, you should be able to run the method itself with the current version.
 
@@ -43,6 +43,7 @@ CUDA_VISIBLE_DEVICES=1,2,3,4 python3 utils/gpu_parallel.py --start 0 --end 500 -
 ```
 Notes:
 - `--use-slow-kernel` uses PyTorch code instead of CUDA kernels if you skipped it during installation. Slow kernels will affect real-time delays!
+- `--mode` can be `async_reasoning`, `baseline_think`, `baseline_no_think`.
 - `CUDA_VISIBLE_DEVICES` must be specified for `gpu_parallel.py` to work.
 
 The results can be aggregated from the `json` files under `./eval_results` folder. For instance:
