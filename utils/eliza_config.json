@@ -1,5 +1,5 @@
 {
     "token": "",
-    "url": "https://api.eliza.yandex.net/openai/v1/chat/completions",
+    "url": "https://api.openai.com/v1/chat/completions",
     "model": "gpt-4-turbo"
 }
