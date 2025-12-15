@@ -25,6 +25,10 @@ More detailed instructions will be added shortly. However, you should be able to
 
 If you have questions or encounter difficulties with our code specifically, please open an issue.
 
+## Answer evaluation
+
+There are two ways to evaluate the results: using the same model, or a canonical API call as a judge. Before using the API-based judge, populate [`./utils/api_config.json`](./utils/api_config.json) (recommended). Alternatively, you can use a local model, but fast kernels are not yet supported.
+
 ## Running MATH500 and MMLU-Pro evals
 
 **Single GPU MATH-500**
