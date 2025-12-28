@@ -1,4 +1,7 @@
 import sys
+
+import datasets
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -50,6 +53,7 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
+    parser.add_argument("--dataset_path", type=str, default=None, help="optionally override math500 dataset - this should be a path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
     return parser.parse_args()
@@ -91,7 +95,10 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
+    if args.custom_dataset is None:
+        dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
+    else:
+        dataset_math = datasets.load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/math500/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
