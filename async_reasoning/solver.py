@@ -3,7 +3,8 @@ import torch
 import warnings
 import transformers
 from IPython.display import display, Markdown, clear_output
-from typing import Sequence, Union, Callable, Optional
+from typing import Sequence, Union, Callable, Optional, List, Tuple
+import queue
 
 from async_reasoning.prompting import AsyncReasoningPrompting
 from async_reasoning.cache import State, AsyncReasoningCache
@@ -92,6 +93,7 @@ class AsyncReasoningSolver:
                 None,
             ]
         ] = None,
+        live_context_queue: Optional["LiveContextQueue"] = None,
     ):
 
         prompting = AsyncReasoningPrompting(problem)
@@ -104,6 +106,7 @@ class AsyncReasoningSolver:
         thinker_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
+        pending_injections: List["QueuedInjection"] = []
         with torch.inference_mode():
             t0 = time.perf_counter()
             for step in range(budget):
@@ -137,6 +140,17 @@ class AsyncReasoningSolver:
                 if writer_output_tokens[-1] == self.tokenizer.eos_token_id:
                     eos_generated = True
 
+                # Inject any user-provided context mid-generation
+                if live_context_queue is not None:
+                    pending_injections.extend(live_context_queue.pop_all())
+                    if pending_injections:
+                        pending_injections = self._apply_pending_injections(
+                            pending_injections,
+                            cache,
+                            writer_output_tokens,
+                            thinker_output_tokens,
+                        )
+
                 if on_new_tokens_generated is not None:
                     on_new_tokens_generated(
                         writer_output_tokens,
@@ -154,3 +168,66 @@ class AsyncReasoningSolver:
         writer_output_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
 
         return writer_output_str, thinker_output_str, token_times, eos_generated
+
+    def _apply_pending_injections(
+        self,
+        pending_injections: List["QueuedInjection"],
+        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'],
+        writer_output_tokens: List[int],
+        thinker_output_tokens: List[int],
+    ) -> List["QueuedInjection"]:
+        remaining: List["QueuedInjection"] = []
+        for inj in pending_injections:
+            token_stream = writer_output_tokens if inj.target == "writer" else thinker_output_tokens
+            if inj.defer_until_boundary and not self._is_boundary(token_stream):
+                remaining.append(inj)
+                continue
+            tokens_tensor = torch.tensor([inj.tokens], device=self.device)
+            cache.append_tokens(inj.target, tokens_tensor)
+            if inj.target == "writer":
+                writer_output_tokens.extend([int(t) for t in inj.tokens])
+            else:
+                thinker_output_tokens.extend([int(t) for t in inj.tokens])
+        return remaining
+
+    def _is_boundary(self, tokens: Sequence[int]) -> bool:
+        # Treat paragraph breaks or sentence-ending punctuation as safe injection points.
+        tail = self.tokenizer.decode(tokens[-12:]) if tokens else ""
+        if tail.endswith("\n\n"):
+            return True
+        return any(tail.rstrip().endswith(mark) for mark in (".", "!", "?", "…"))
+
+
+class QueuedInjection:
+    def __init__(self, target: str, tokens: List[int], defer_until_boundary: bool):
+        self.target = target
+        self.tokens = tokens
+        self.defer_until_boundary = defer_until_boundary
+
+
+class LiveContextQueue:
+    """Thread-safe queue for feeding extra context tokens/text mid-generation."""
+    def __init__(self, tokenizer: transformers.PreTrainedTokenizer, device: torch.device):
+        self._queue: queue.Queue[QueuedInjection] = queue.Queue()
+        self.tokenizer = tokenizer
+        self.device = device
+
+    def push_text(self, text: str, target: str = "thinker", defer_until_boundary: bool = False):
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        self.push_tokens(tokens, target=target, defer_until_boundary=defer_until_boundary)
+
+    def push_tokens(
+        self,
+        tokens: Sequence[int],
+        target: str = "thinker",
+        defer_until_boundary: bool = False,
+    ):
+        if target not in ("writer", "thinker"):
+            raise ValueError(f"target must be 'writer' or 'thinker', got {target}")
+        self._queue.put(QueuedInjection(target, list(tokens), defer_until_boundary))
+
+    def pop_all(self) -> List[QueuedInjection]:
+        items: List[QueuedInjection] = []
+        while not self._queue.empty():
+            items.append(self._queue.get())
+        return items

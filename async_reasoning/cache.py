@@ -64,6 +64,10 @@ class AsyncReasoningCache:
             cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output]],
             write_to=[self.thinker_output],
         )
+        self.cm_writer_only = shared_cache.SharedCacheManager(
+            cache_structure=[[self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output]],
+            write_to=[self.writer_output],
+        )
         self.cm_thinker_control = shared_cache.SharedCacheManager(
             cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output, self.thinker_question]],
             write_to=[self.thinker_question],
@@ -94,3 +98,15 @@ class AsyncReasoningCache:
 
     def get_input_kwargs(self, **kwargs):
         return self.cache_manager.get_input_kwargs(**kwargs)
+
+    def append_tokens(self, target: str, token_ids: torch.Tensor):
+        """Append pre-tokenized ids to writer or thinker caches so generation can consume them mid-stream."""
+        if target not in ("writer", "thinker"):
+            raise ValueError(f"target must be 'writer' or 'thinker', got {target}")
+        token_ids = token_ids.to(self.device)
+        if target == "writer":
+            input_kwargs = self.cm_writer_only.get_input_kwargs(token_ids)
+        else:
+            input_kwargs = self.cm_thinker_only.get_input_kwargs(token_ids)
+        with torch.inference_mode():
+            self.model(**input_kwargs)
