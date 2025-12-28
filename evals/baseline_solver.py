@@ -91,6 +91,8 @@ class BaselineSolver:
             )
         finally:
             handle.remove()
+        if len(self.token_times) == 0:
+            self.token_times.append(("EMPTY", time.perf_counter() - self.starting_time, self.current_step))
         return (
             self.tokenizer.decode(self.writer_tokens), 
             self.tokenizer.decode(self.thinker_tokens[2:]), # here [2:] is "<think>\n""
