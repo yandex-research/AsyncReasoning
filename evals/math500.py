@@ -95,9 +95,10 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    if args.custom_dataset is None:
+    if args.dataset_path is None:
         dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
     else:
+        print(f"Overriding benchmark data with {args.dataset_path}")
         dataset_math = datasets.load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/math500/{args.mode}"
