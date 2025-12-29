@@ -19,6 +19,7 @@ class AsyncReasoningSolver:
         forbidden_token_ix: Sequence[int] = [],
         thinker_forbidden_token_ix: Sequence[int] = [],
         writer_forbidden_token_ix: Sequence[int] = [],
+        end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True
     ):
         if use_fast_kernel:
@@ -38,6 +39,7 @@ class AsyncReasoningSolver:
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
         self.thinker_forbidden_token_ix, self.writer_forbidden_token_ix = thinker_forbidden_token_ix, writer_forbidden_token_ix
+        self.end_of_think_token_ix = end_of_think_token_ix
         self.use_fast_kernel = use_fast_kernel
 
     @torch.inference_mode()
@@ -105,13 +107,21 @@ class AsyncReasoningSolver:
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
         with torch.inference_mode():
-            t0 = time.perf_counter()
+            starting_time = time.perf_counter()
             for step in range(budget):
                 if cache.state == State.thinker_only:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=self.device)}
                     logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
                     logits[..., self.thinker_forbidden_token_ix] -= 100
                     thinker_output_tokens.append(int(logits.argmax(-1)))
+
+                elif cache.state == State.writer_only:
+                    next_inputs = {"input_ids": torch.tensor([writer_output_tokens[-1:]], device=self.device)}
+                    logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+                    logits[..., self.writer_forbidden_token_ix] -= 100
+                    writer_next_token = logits.argmax(-1)
+                    writer_output_tokens.append(int(writer_next_token))
+                    token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
 
                 elif cache.state == State.thinker_and_writer:
                     next_inputs = {"input_ids": torch.tensor([writer_output_tokens[-1:], thinker_output_tokens[-1:]], device=self.device)}
@@ -123,15 +133,17 @@ class AsyncReasoningSolver:
                     writer_next_token, thinker_next_token = logits.argmax(-1)
                     writer_output_tokens.append(int(writer_next_token))
                     thinker_output_tokens.append(int(thinker_next_token))
-                    t1 = time.perf_counter()
-                    token_times.append((self.tokenizer.decode(writer_next_token.item()), t1 - t0, step))
+                    token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
                     if self.is_end_of_step(writer_output_tokens):  # wait for the thinker's signal to continue
                         cache.state = State.thinker_only
                 else:
                     raise ValueError(f"Unexpected state {cache.state}")
-
-                if (step + 1) % 20 == 0 or self.is_end_of_step(thinker_output_tokens):  # ask thinker if we can continue writing
+                
+                if cache.state != State.writer_only and thinker_output_tokens[-1] in self.end_of_think_token_ix:
+                    cache.state = State.writer_only
+                if cache.state != State.writer_only and ((step + 1) % 20 == 0 or self.is_end_of_step(thinker_output_tokens)):  # ask thinker if we can continue writing
                     cache.state = State.thinker_and_writer if self.check_if_should_continue_writing(cache, prompting, use_trimming=False) else State.thinker_only
+
                 if display_generation_in_real_time:
                     self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)
                 if writer_output_tokens[-1] == self.tokenizer.eos_token_id:
@@ -150,7 +162,7 @@ class AsyncReasoningSolver:
                     break
             else:  # ran out of budget
                 if len(token_times) == 0:
-                    token_times.append(("EMPTY", time.perf_counter() - t0, step))
+                    token_times.append(("EMPTY", time.perf_counter() - starting_time, step))
         writer_output_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
 
         return writer_output_str, thinker_output_str, token_times, eos_generated
