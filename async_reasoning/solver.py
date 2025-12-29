@@ -160,9 +160,8 @@ class AsyncReasoningSolver:
 
                 if eos_generated:
                     break
-            else:  # ran out of budget
-                if len(token_times) == 0:
-                    token_times.append(("EMPTY", time.perf_counter() - starting_time, step))
+            if len(token_times) == 0:
+                token_times.append(("EMPTY", time.perf_counter() - starting_time, step))
         writer_output_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
 
         return writer_output_str, thinker_output_str, token_times, eos_generated
