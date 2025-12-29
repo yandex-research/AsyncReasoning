@@ -77,12 +77,12 @@ def main():
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
         writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
         thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
-        end_of_think_token_dx = [tokenizer.vocab[x] for x in ["</think>"]]
+        end_of_think_token_ix = [tokenizer.vocab[x] for x in ["</think>"]]
         solver_kwargs.update({
             "writer_forbidden_token_ix": writer_forbidden_token_ix,
             "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
-            "end_of_think_token_dx": end_of_think_token_dx,
+            "end_of_think_token_ix": end_of_think_token_ix,
         })
     elif args.mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
