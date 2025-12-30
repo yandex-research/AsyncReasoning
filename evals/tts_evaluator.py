@@ -419,7 +419,7 @@ class TTSEvaluator:
         delays = np.array(self.compute_delays(chunk_ready, spk_times))
         
         metrics = {
-            "delay_to_first": float(delays[0]),
+            "delay_to_first": float(delays[0] if len(delays) > 0 else 0.0),
             "total_delay": float(np.sum(delays)),
             "total_delay_mius1": float(np.sum(np.maximum(delays - 1, 0))),
             "duration_no_delay": float(np.sum(spk_times)),
@@ -432,10 +432,12 @@ class TTSEvaluator:
                 for el in chunk:
                     delay_minus10steps += max(el - prev_generated_step - 10, 0)
                     prev_generated_step = el
+                    steps_to_first = gen_steps[0][0] if (gen_steps and gen_steps[0]) else 0
+                    steps_to_last = gen_steps[-1][-1] if (gen_steps and gen_steps[-1]) else 0
                     
             metrics.update({
-                "steps_to_first": int(gen_steps[0][0]),
-                "delay_steps": int(1 + gen_steps[-1][-1] - sum([len(el) for el in gen_steps])),
+                "steps_to_first": int(steps_to_first),
+                "delay_steps": int(1 + steps_to_last - sum([len(el) for el in gen_steps])),
                 "delay_minus10steps": int(delay_minus10steps),
             })
         if return_delays:

@@ -89,6 +89,8 @@ class BaselineSolver:
                 return_dict_in_generate=True,
                 output_scores=False,
             )
+            if len(self.token_times) == 0:
+                self.token_times.append(("EMPTY", time.perf_counter() - self.starting_time, self.current_step))
         finally:
             handle.remove()
         return (

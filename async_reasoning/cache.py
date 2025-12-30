@@ -1,19 +1,18 @@
 from enum import Enum
 from IPython.display import display, Markdown, clear_output
 import torch
-import transformers
 import shared_cache
-from typing import Sequence
 
 
 import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
-# state can be "thinker_only" or "thinker_and_writer"
+# state can be "thinker_only" or "thinker_and_writer" or "writer_only"
 class State(Enum):
     thinker_only = 0
     thinker_and_writer = 1
+    writer_only = 2
 
 class AsyncReasoningCache:
     """Create separate blocks of LLM KV cache that are arranged depending on inference mode (thinker_only, thinker_and_writer, etc)"""
@@ -59,7 +58,8 @@ class AsyncReasoningCache:
         prefill_cache_block(self.prompting.thinker_control_question,
             [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output, self.thinker_question])
 
-        # prepare cache manager for each mode: only thinker and thinker+writer in parallel - it is needed to generate in each mode
+        # prepare cache manager for each mode:
+        # only thinker, only writer and thinker+writer in parallel - it is needed to generate in each mode
         self.cm_thinker_only = shared_cache.SharedCacheManager(
             cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output]],
             write_to=[self.thinker_output],
@@ -91,6 +91,8 @@ class AsyncReasoningCache:
         match self.state:
             case State.thinker_only:
                 return self.cm_thinker_only
+            case State.writer_only:
+                return self.cm_writer_only
             case State.thinker_and_writer:
                 return self.cm_thinker_and_writer
             case _:
