@@ -164,7 +164,7 @@ def main():
         accuracy_numerator += int(is_equal)
         accuracy_denominator += 1
         current_accuracy = (accuracy_numerator / accuracy_denominator)
-        print(f'>>> {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}', file=sys.stderr)
+        print(end=f'[{rank=}] {idx=}, {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}', file=sys.stderr)
         with open(save_path, "w") as f:
             json.dump(result, f, indent=2)
         if "NV_YT_OPERATION_ID" in os.environ and rank == 0 and (
