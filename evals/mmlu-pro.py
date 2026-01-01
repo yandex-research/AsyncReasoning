@@ -108,6 +108,7 @@ def main():
     if args.num_samples is not None:
         print(f"Subsampling {args.num_samples} samples (seed={args.seed})")
         dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
+    print(f"Evaluation dataset size = {len(dataset_mmlu)}")
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/mmlu-pro/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
