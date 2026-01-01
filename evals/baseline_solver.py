@@ -14,7 +14,8 @@ class BaselineSolver:
     def __init__(self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        thinker_enabled: bool = True,  
+        thinker_enabled: bool = True,
+        use_torch_compile: bool = True,
     ):
         self.model = model
         self.device = model.device

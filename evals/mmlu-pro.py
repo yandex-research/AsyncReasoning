@@ -50,7 +50,7 @@ def parse_args():
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument("--num-samples", type=int, required=True, help="The size of subset used for evaluation")
+    parser.add_argument("--num-samples", type=int, default=None, help="The size of subset used for evaluation")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/mmlu-pro")
@@ -105,7 +105,9 @@ def main():
 
     solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_mmlu = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
-    dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
+    if args.num_samples is not None:
+        print(f"Subsampling {args.num_samples} samples (seed={args.seed})")
+        dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/mmlu-pro/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)

@@ -20,12 +20,15 @@ class AsyncReasoningSolver:
         thinker_forbidden_token_ix: Sequence[int] = [],
         writer_forbidden_token_ix: Sequence[int] = [],
         end_of_think_token_ix: Sequence[int] = [],
-        use_fast_kernel: bool = True
+        use_fast_kernel: bool = True,
+        use_torch_compile: bool = True,
     ):
         if use_fast_kernel:
             from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
             model_surgery(model)
+            if use_torch_compile:
+                model = torch.compile(model)
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
