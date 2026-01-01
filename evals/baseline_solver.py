@@ -1,3 +1,4 @@
+import os
 import time
 import torch
 import transformers
@@ -10,12 +11,13 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
+
 class BaselineSolver:
     def __init__(self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
         thinker_enabled: bool = True,
-        use_torch_compile: bool = True,
+        use_torch_compile: bool = bool(int(os.environ.get("USE_TORCH_COMPILE", 1))),
     ):
         self.model = model
         self.device = model.device

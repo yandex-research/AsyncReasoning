@@ -1,3 +1,4 @@
+import os
 import time
 import torch
 import warnings
@@ -21,17 +22,19 @@ class AsyncReasoningSolver:
         writer_forbidden_token_ix: Sequence[int] = [],
         end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True,
-        use_torch_compile: bool = True,
+        use_torch_compile: bool = None,
     ):
+        if use_torch_compile is None:
+            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
         if use_fast_kernel:
             from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
             model_surgery(model)
-            if use_torch_compile:
-                model = torch.compile(model)
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
+        if use_torch_compile:
+            model = torch.compile(model)
         if forbidden_token_ix:
             assert not (thinker_forbidden_token_ix or writer_forbidden_token_ix)
             thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
