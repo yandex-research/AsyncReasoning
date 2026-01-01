@@ -54,11 +54,11 @@ def parse_args():
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
     parser.add_argument("--next_shard_every_steps", type=int, help="Setting to set up shards appearance frequency. Exceptions are: 0 -- concat, -1 -- never supply the rest of the shards.")
     parser.add_argument(
-        "--shared_to_target",
+        "--shard_to_target",
         nargs="+",
         choices=["thinker", "writer"],
         default=None,
-        help='Where to share live context. Use: --shared_to_target thinker | writer',
+        help='Where to share live context. Use: --shard_to_target thinker | writer',
     )
     return parser.parse_args()
 
@@ -94,7 +94,7 @@ def main():
         })
     elif args.mode in ["baseline_think", "baseline_no_think"]:
         assert args.next_shard_every_steps is None, "async_input mode does not work in baselines."
-        assert args.shared_to_target is None, "async_input mode does not work in baselines."
+        assert args.shard_to_target is None, "async_input mode does not work in baselines."
         from evals.baseline_solver import BaselineSolver as Solver, LiveContextQueue
         solver_kwargs.update({
             "thinker_enabled": (args.mode == "baseline_think"),
@@ -125,7 +125,7 @@ def main():
         def on_token(writer_tokens, thinker_tokens, token_times, eos, state, queue):
             if args.next_shard_every_steps <= 0:
                 return
-            for target in args.shared_to_target:
+            for target in args.shard_to_target:
                 if queue.push_counter_per_target[target] == 0 and len(thinker_tokens) >= args.next_shard_every_steps:
                     queue.push_text(f"\n\nADDITIONAL USER INPUT:{problem_shards[0]}\n\n", target=target, defer_until_boundary=True)
 
