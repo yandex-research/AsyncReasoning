@@ -113,15 +113,10 @@ def main():
         instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
-        triggered = False
         live = LiveContextQueue(tokenizer, model.device)
-        def on_token(writer_tokens, thinker_tokens, token_times, eos, state):
-            global triggered
-            if triggered:
-                return 
-            if args.next_shard_every_steps > 0 and len(thinker_tokens) >= args.next_shard_every_steps:
-                live.push_text(problem_shards[0], target="thinker", defer_until_boundary=True)  # or target="writer" if you want
-                triggered = True
+        def on_token(writer_tokens, thinker_tokens, token_times, eos, state, queue):
+            if queue.push_counter == 0 and args.next_shard_every_steps > 0 and len(thinker_tokens) >= args.next_shard_every_steps:
+                queue.push_text(f"\n\nADDITIONAL USER INPUT:{problem_shards[0]}\n\n", target="thinker", defer_until_boundary=True)  # or target="writer" if you want
 
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \

@@ -91,7 +91,7 @@ class AsyncReasoningSolver:
         budget: int = 1024,
         on_new_tokens_generated: Optional[
             Callable[
-                [Sequence[int], Sequence[int], tuple[str, float, int], bool, State],
+                [Sequence[int], Sequence[int], tuple[str, float, int], bool, State, "LiveContextQueue"],
                 None,
             ]
         ] = None,
@@ -170,6 +170,7 @@ class AsyncReasoningSolver:
                         token_times,
                         eos_generated,
                         cache.state,
+                        live_context_queue,
                     )
 
                 if eos_generated:
@@ -222,10 +223,12 @@ class LiveContextQueue:
         self._queue: queue.Queue[QueuedInjection] = queue.Queue()
         self.tokenizer = tokenizer
         self.device = device
+        self.push_counter = 0
 
     def push_text(self, text: str, target: str = "thinker", defer_until_boundary: bool = False):
         tokens = self.tokenizer.encode(text, add_special_tokens=False)
         self.push_tokens(tokens, target=target, defer_until_boundary=defer_until_boundary)
+        self.push_counter += 1
 
     def push_tokens(
         self,
