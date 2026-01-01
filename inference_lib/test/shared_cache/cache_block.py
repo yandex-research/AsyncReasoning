@@ -11,7 +11,7 @@ import transformers
 import triton
 import triton.language as tl
 
-USE_TRITON = bool(int(os.environ.get("HOGWILD_USE_TRITON", "1")))
+USE_TRITON = bool(int(os.environ.get("USE_TRITON", "1")))
 
 
 class CacheBlock(transformers.cache_utils.DynamicCache):
@@ -132,7 +132,7 @@ def compute_rotary_cos_sin(
             return _compute_rotary_cos_sin(offset, inv_freq, attention_scaling, unsqueeze_dim, dtype, device)
 
 
-@torch.compile(dynamic=True, disable=bool(int(os.environ.get("HOGWILD_NO_COMPILE", False))))
+@torch.compile(dynamic=True, disable=not bool(int(os.environ.get("USE_TORCH_COMPILE", True))))
 def _compute_rotary_cos_sin(
         offset: int, inv_freq: torch.Tensor, attention_scaling: float, unsqueeze_dim: int, dtype: torch.dtype, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -194,7 +194,7 @@ def _compute_rotary_cos_sin_triton(
     return cos.to(dtype), sin.to(dtype)
 
 
-@torch.compile(dynamic=None, disable=bool(int(os.environ.get("HOGWILD_NO_COMPILE", False))))
+@torch.compile(dynamic=True, disable=not bool(int(os.environ.get("USE_TORCH_COMPILE", True))))
 def _apply_rotary_cos_sin(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """Rotates half the hidden dims of the input."""
     x_dim, pe_dim = x.shape[-1], cos.shape[-1]
