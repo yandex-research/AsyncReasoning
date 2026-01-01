@@ -1,4 +1,6 @@
 import sys
+import warnings
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -63,7 +65,8 @@ def main():
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
-    assert args.model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"
+    if 'qwen' not in args.model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)

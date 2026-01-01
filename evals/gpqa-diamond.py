@@ -1,4 +1,6 @@
-import sys; 
+import sys;
+import warnings
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -75,7 +77,8 @@ def main():
     print("OMP_NUM_THREADS:", os.environ["OMP_NUM_THREADS"])
     
     model_name = args.model_name
-    assert model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"\
+    if 'qwen' not in model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
