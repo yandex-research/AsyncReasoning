@@ -3,9 +3,7 @@ import time
 import torch
 import transformers
 from IPython.display import display, Markdown, clear_output
-from typing import Sequence, Union, Tuple, Dict, Any
-
-from async_reasoning.prompting import AsyncReasoningPrompting
+from typing import Sequence
 
 import logging
 logger = logging.getLogger(__name__)
@@ -26,10 +24,14 @@ class BaselineSolver:
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
         self.thinker_enabled = thinker_enabled
-        assert str(model.name_or_path).startswith("Qwen/Qwen3"), f"Support only Qwen3 for now, but {model.name_or_path} provided"
-        self.eos_ids = model.generation_config.eos_token_id
-        if isinstance(self.eos_ids, int):
-            self.eos_ids = [self.eos_ids]
+        self.eos_token_ix = model.generation_config.eos_token_id
+        if isinstance(self.eos_token_ix, int):
+            self.eos_token_ix = [self.eos_token_ix]
+        if model.config.model_type == "gpt_oss":
+            self.end_of_thinking_token_ix = [self.tokenizer.vocab[i] for i in ['<|channel|>', 'final', '<|message|>']]
+        else:
+            assert model.config.model_type.startswith('qwen3'), "only tested with qwen3 and gpt-oss, remove this at your own risk"
+            self.end_of_thinking_token_ix = [self.tokenizer.vocab["</think>"]]
     
     def _init_token_times_counters(self):
         self.token_times = []
@@ -37,7 +39,7 @@ class BaselineSolver:
         self.starting_time = time.perf_counter()
         self.thinker_tokens = []
         self.writer_tokens = []
-        self.in_thinking_mode = self.thinker_enabled
+        self.in_thinking_mode = self.thinker_enabled or self.model.config.model_type == 'gpt_oss'
         self.eos_generated = False
     
     def forward_hook(self, model, _unused_args, output, **_unused_kwargs):
@@ -48,13 +50,13 @@ class BaselineSolver:
         if not self.in_thinking_mode:
             token_times_item = (self.tokenizer.decode(next_token), time.perf_counter() - self.starting_time, self.current_step)
             self.token_times.append(token_times_item)
-            if next_token in self.eos_ids:
+            if next_token in self.eos_token_ix:
                 self.eos_generated = True
             self.writer_tokens.append(next_token) 
         else:
-            if next_token == self.tokenizer.vocab["</think>"]:
+            self.thinker_tokens.append(next_token)
+            if self.thinker_tokens[-len(self.end_of_thinking_token_ix):] == self.end_of_thinking_token_ix:
                 self.in_thinking_mode = False
-            self.thinker_tokens.append(next_token) 
         if self.display_generation_in_real_time:
             self.display_tokens(self.writer_tokens, self.thinker_tokens)
         self.current_step += 1
@@ -78,12 +80,18 @@ class BaselineSolver:
             budget: int = 1024,
         ):
         self.display_generation_in_real_time = display_generation_in_real_time
-        text = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": problem}],
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=self.thinker_enabled
-        )
+        if self.model.config.model_type.startswith("qwen3"):
+            text = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": problem}],
+                tokenize=False, add_generation_prompt=True, enable_thinking=self.thinker_enabled)
+        elif self.model.config.model_type == 'gpt_oss':
+            text = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": problem}],
+                tokenize=False, reasoning_effort=("high" if self.thinker_enabled else "low"),
+                add_generation_prompt=True)
+        else:
+            raise NotImplementedError(f"Unsupported chat template for model type {self.model.config.model_type}.")
+
         input_ids = self.tokenizer.encode(text, **self.tokenizer_kwargs).to(self.device)
 
         handle = self.model.register_forward_hook(self.forward_hook)
