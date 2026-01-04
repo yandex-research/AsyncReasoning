@@ -127,6 +127,8 @@ class NewGenerationMixin(GenerationMixin):
         """
         setup_seed(seed)
         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
+        self._validate_model_class()
+
         # priority: `generation_config` argument > `model.generation_config` (the default generation config)
         if generation_config is None:
             # legacy: users may modify the model configuration to control generation -- update the generation config
