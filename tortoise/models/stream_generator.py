@@ -202,9 +202,9 @@ class NewGenerationMixin(GenerationMixin):
             model_kwargs.get("attention_mask", None) is None
             and requires_attention_mask
             and accepts_attention_mask
-        ):  
+        ):
             # TODO: Do better
-            generation_config._pad_token_tensor = torch.tensor(generation_config.pad_token_id, device="cuda:0") 
+            generation_config._pad_token_tensor = torch.tensor(generation_config.pad_token_id, device="cuda:0")
             generation_config._eos_token_tensor = torch.tensor(generation_config.eos_token_id, device="cuda:0")
             model_kwargs[
                 "attention_mask"
@@ -983,10 +983,10 @@ class NewGenerationMixin(GenerationMixin):
             yield next_tokens, self.final_norm(outputs.hidden_states[-1][:, -1])
             # update generated ids, model inputs, and length for next step
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-            
+
             if "cache_position" not in model_kwargs or model_kwargs["cache_position"] is None:
                 model_kwargs["cache_position"] = torch.arange(0, input_ids.shape[-1], device=input_ids.device)
-            
+
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs, model_kwargs, is_encoder_decoder=self.config.is_encoder_decoder
             )

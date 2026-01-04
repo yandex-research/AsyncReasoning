@@ -3,7 +3,7 @@ import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import GPT2Config, GPT2PreTrainedModel, LogitsProcessorList
+from transformers import GPT2Config, GPT2PreTrainedModel, LogitsProcessorList, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 from transformers.utils.model_parallel_utils import get_device_map, assert_device_map
 from tortoise.models.arch_util import AttentionBlock
@@ -32,7 +32,7 @@ class ResBlock(nn.Module):
         return F.relu(self.net(x) + x)
 
 
-class GPT2InferenceModel(GPT2PreTrainedModel):
+class GPT2InferenceModel(GPT2PreTrainedModel, GenerationMixin):
     def __init__(self, config, gpt, text_pos_emb, embeddings, norm, linear, kv_cache=False):
         super().__init__(config)
         self.transformer = gpt
