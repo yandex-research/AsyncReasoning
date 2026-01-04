@@ -421,7 +421,7 @@ class TTSEvaluator:
         metrics = {
             "delay_to_first": float(delays[0] if len(delays) > 0 else 0.0),
             "total_delay": float(np.sum(delays)),
-            "total_delay_mius1": float(np.sum(np.maximum(delays - 1, 0))),
+            "total_delay_minus1": float(np.sum(np.maximum(delays - 1, 0))),
             "duration_no_delay": float(np.sum(spk_times)),
             "duration_with_delay": float(np.sum(spk_times) + float(np.sum(delays))),
         }
