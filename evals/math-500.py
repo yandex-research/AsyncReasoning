@@ -104,7 +104,7 @@ def main():
         print(f"Overriding benchmark data with {args.dataset_path}")
         dataset_math = datasets.load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math500/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/math-500/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
