@@ -32,7 +32,7 @@ class BaselineSolver:
         else:
             assert model.config.model_type.startswith('qwen3'), "only tested with qwen3 and gpt-oss, remove this at your own risk"
             self.end_of_thinking_token_ix = [self.tokenizer.vocab["</think>"]]
-    
+
     def _init_token_times_counters(self):
         self.token_times = []
         self.current_step = 0
@@ -108,7 +108,9 @@ class BaselineSolver:
             handle.remove()
         return (
             self.tokenizer.decode(self.writer_tokens), 
-            self.tokenizer.decode(self.thinker_tokens[2:]), # here [2:] is "<think>\n""
+            self.tokenizer.decode(
+                self.thinker_tokens[2:] if self.model.config.model_type != "gpt_oss" else self.thinker_tokens[3:-6]),
+                # by default, [2:] is "<think>\n"";  for openai, it's <|channel|>analysis<|message|>CONTENT<|end|><|start|>assistant<|channel|>final<|message|>
             self.token_times, 
             self.eos_generated,
     )
