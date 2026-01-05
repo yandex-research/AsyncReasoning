@@ -54,7 +54,7 @@ class AsyncReasoningCacheFastKernels:
         # prepare cache manager for each mode:
         # only thinker, only writer and thinker+writer in parallel - it is needed to generate in each mode
         self.cm_thinker_only = HogwildCache(
-            cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output]],
+            cache_structure=[[self.thinker_prompt, self.thinker_split, self.thinker_output]],
             write_to=[self.thinker_output],
             model=model,
         )
@@ -71,7 +71,7 @@ class AsyncReasoningCacheFastKernels:
         self.cm_thinker_and_writer = HogwildCache(
             cache_structure=[
                 [self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output],
-                [self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output],
+                [self.thinker_prompt, self.thinker_split, self.thinker_output],
             ],
             write_to=[self.writer_output, self.thinker_output],
             model=model,

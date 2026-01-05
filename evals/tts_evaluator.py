@@ -432,9 +432,10 @@ class TTSEvaluator:
                 for el in chunk:
                     delay_minus10steps += max(el - prev_generated_step - 10, 0)
                     prev_generated_step = el
-                    steps_to_first = gen_steps[0][0] if (gen_steps and gen_steps[0]) else 0
-                    steps_to_last = gen_steps[-1][-1] if (gen_steps and gen_steps[-1]) else 0
-                    
+
+            steps_to_first = gen_steps[0][0] if (gen_steps and gen_steps[0]) else 0
+            steps_to_last = gen_steps[-1][-1] if (gen_steps and gen_steps[-1]) else 0
+
             metrics.update({
                 "steps_to_first": int(steps_to_first),
                 "delay_steps": int(1 + steps_to_last - sum([len(el) for el in gen_steps])),
