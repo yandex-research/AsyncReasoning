@@ -10,6 +10,9 @@ from async_reasoning.prompting import AsyncReasoningPrompting
 from async_reasoning.cache import State, AsyncReasoningCache
 
 import logging
+
+from utils.patch_model import prepare_model_for_inference
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
@@ -23,9 +26,8 @@ class AsyncReasoningSolver:
         end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True,
         use_torch_compile: bool = None,
+        **kwargs
     ):
-        if use_torch_compile is None:
-            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
         if use_fast_kernel:
             from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
@@ -33,8 +35,9 @@ class AsyncReasoningSolver:
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
-        if use_torch_compile:
-            model = torch.compile(model)
+        if use_torch_compile is None:
+            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
+        model = prepare_model_for_inference(model, use_torch_compile=use_torch_compile, **kwargs)
         if forbidden_token_ix:
             assert not (thinker_forbidden_token_ix or writer_forbidden_token_ix)
             thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
