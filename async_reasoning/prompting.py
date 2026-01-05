@@ -1,5 +1,5 @@
 # thinker (t) is worker 0, writer (w) is worker 1, mode switching is queried separately
-# thinker sees:    "{input_prompt}{thinker_extra_prompt}{thinker_output}"
+# thinker sees:    "{input_prompt}{thinker_output}"
 # writer sees:     "{input_prompt}{thinker_output}{writer_output}
 # mode switching:  "{mode_switching_prompt}{thinker_output}{writer_output}
 # TODO mode switching does not see the original problem
@@ -10,11 +10,6 @@ class AsyncReasoningPrompting:
         self.input_prompt = f"""
 <|im_start|>user
 {problem}
-""".strip() + "\n"
-        self.thinker_extra_prompt = f"""
-You are an AI assistant that can think and write outputs concurrently.
-Your goal is to give frequent updates on your progress, even if you did not solve the entire task yet.
-Reason in short paragraphs. Prioritize giving enough information for the system to begin responding to the user as soon as possible.
 """.strip() + "\n"
         # writer_output and thinker_output starts with these prefixes
         self.thinker_output_prefix = "<|im_end|>\n<|im_start|>assistant\n<think>\n"

@@ -28,9 +28,8 @@ class AsyncReasoningCache:
         self.state = starting_state
 
         # Init all needed cache blocks
-        (self.input_prompt, self.thinker_extra_prompt, self.thinker_output, self.writer_output,
-         self.mode_switching_prompt, self.mode_switching_question
-         ) = (shared_cache.CacheBlock(config=self.model.config) for _ in range(6))
+        (self.input_prompt, self.thinker_output, self.writer_output, self.mode_switching_prompt, self.mode_switching_question
+         ) = (shared_cache.CacheBlock(config=self.model.config) for _ in range(5))
 
         def prefill_cache_block(text: str, blocks, write_to=None):
             write_to = blocks[-1] if write_to is None else write_to
@@ -41,13 +40,12 @@ class AsyncReasoningCache:
         
         # encode each prompt section as LLM KV cache for use in generation
         prefill_cache_block(self.prompting.input_prompt, [self.input_prompt]) # <-- writes KV entries to last cache in list
-        prefill_cache_block(self.prompting.thinker_extra_prompt, [self.input_prompt, self.thinker_extra_prompt])
-        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.thinker_extra_prompt, self.thinker_output])
-        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.thinker_extra_prompt, self.thinker_output, self.writer_output])
+        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.thinker_output])
+        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.thinker_output, self.writer_output])
         prefill_cache_block(self.prompting.mode_switching_prompt, [self.mode_switching_prompt])
         # note: mode_switching_question is re-encoded every time it is asked - no need to fill it here
 
-        thinker_view = (self.input_prompt, self.thinker_extra_prompt, self.thinker_output)
+        thinker_view = (self.input_prompt, self.thinker_output)
         writer_view = (self.input_prompt, self.thinker_output, self.writer_output)
         mode_switching_view = (self.mode_switching_prompt, self.thinker_output, self.writer_output, self.mode_switching_question)
 
