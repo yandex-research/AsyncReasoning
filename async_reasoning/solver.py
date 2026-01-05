@@ -53,9 +53,9 @@ class AsyncReasoningSolver:
         cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'], prompting: AsyncReasoningPrompting
      ) -> bool:
         if self.use_fast_kernel:
-            cache.thinker_question.crop(0)
+            cache.mode_switching_question.crop(0)
         else:
-            cache.thinker_question.clear()
+            cache.mode_switching_question.clear()
         next_inputs = self.tokenizer(prompting.mode_switching_question, **self.tokenizer_kwargs).to(self.device)
 
         logits = self.model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
