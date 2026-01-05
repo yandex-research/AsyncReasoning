@@ -93,7 +93,7 @@ class AsyncReasoningCache:
             case State.thinker_only:
                 return self.cm_thinker_only
             case State.writer_only:
-                return self.cm_thinker_and_writer
+                return self.cm_writer_only
             case State.thinker_and_writer:
                 return self.cm_thinker_and_writer
             case _:
