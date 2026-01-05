@@ -44,7 +44,7 @@ class AsyncReasoningCacheFastKernels:
         # prepare cache manager for each mode: only thinker, only writer and thinker+writer and mode switching
         self.cm_thinker_only = HogwildCache(cache_structure=[thinker_view], model=model)
         self.cm_writer_only = HogwildCache(cache_structure=[writer_view], model=model)
-        self.cm_thinker_and_writer = HogwildCache(cache_structure=[thinker_view, writer_view])
+        self.cm_thinker_and_writer = HogwildCache(cache_structure=[thinker_view, writer_view], model=model)
         self.cm_mode_switching = HogwildCache(cache_structure=[mode_switching_view], model=model)
 
     # To catch and logg state change
