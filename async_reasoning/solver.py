@@ -70,7 +70,7 @@ class AsyncReasoningSolver:
     def display_tokens(self,
         writer_output_tokens: Sequence[int], 
         thinker_output_tokens: Sequence[int], 
-        state: str,
+        state: State,
         ):
         writer_headers, thinker_headers = ["\n\n## Writer mode\n\n", "\n\n## Thinker mode\n\n"]
         writer_text, thinker_text = [self.tokenizer.decode(seq) for seq in [writer_output_tokens, thinker_output_tokens[4:]]]
@@ -123,15 +123,13 @@ class AsyncReasoningSolver:
                     token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
 
                 elif cache.state == State.thinker_and_writer:
-                    next_inputs = {"input_ids": torch.tensor([writer_output_tokens[-1:], thinker_output_tokens[-1:]], device=self.device)}
-                    input_kwargs = cache.get_input_kwargs(**next_inputs)
-                    logger.debug(f"input_kwargs: {input_kwargs}")
-                    logits = self.model(**input_kwargs).logits[..., -1, :]
-                    logits[0, ..., self.writer_forbidden_token_ix] -= 100
-                    logits[1, ..., self.thinker_forbidden_token_ix] -= 100
-                    writer_next_token, thinker_next_token = logits.argmax(-1)
-                    writer_output_tokens.append(int(writer_next_token))
+                    next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:], writer_output_tokens[-1:]], device=self.device)}
+                    logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+                    logits[0, ..., self.thinker_forbidden_token_ix] -= 100
+                    logits[1, ..., self.writer_forbidden_token_ix] -= 100
+                    thinker_next_token, writer_next_token = logits.argmax(-1)
                     thinker_output_tokens.append(int(thinker_next_token))
+                    writer_output_tokens.append(int(writer_next_token))
                     token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
                     if self.is_end_of_step(writer_output_tokens):  # wait for the thinker's signal to continue
                         cache.state = State.thinker_only

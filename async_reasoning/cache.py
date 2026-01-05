@@ -28,9 +28,9 @@ class AsyncReasoningCache:
         self.state = starting_state
 
         # Init all needed cache blocks
-        (self.input_prompt, self.thinker_extra_prompt, self.thinker_output, self.writer_split, self.writer_output,
-         self.mode_switching_prompt, self.mode_switching_question) = (
-            shared_cache.CacheBlock(config=self.model.config) for _ in range(7))
+        (self.input_prompt, self.thinker_extra_prompt, self.thinker_output, self.writer_output,
+         self.mode_switching_prompt, self.mode_switching_question
+         ) = (shared_cache.CacheBlock(config=self.model.config) for _ in range(6))
 
         def prefill_cache_block(text: str, blocks, write_to=None):
             write_to = blocks[-1] if write_to is None else write_to
@@ -40,49 +40,23 @@ class AsyncReasoningCache:
                 self.model(**tmp_cm.get_input_kwargs(encoded))
         
         # encode each prompt section as LLM KV cache for use in generation
-
         prefill_cache_block(self.prompting.input_prompt, [self.input_prompt]) # <-- writes KV entries to last cache in list
         prefill_cache_block(self.prompting.thinker_extra_prompt, [self.input_prompt, self.thinker_extra_prompt])
+        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.thinker_extra_prompt, self.thinker_output])
+        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.thinker_extra_prompt, self.thinker_output, self.writer_output])
+        prefill_cache_block(self.prompting.mode_switching_prompt, [self.mode_switching_prompt])
+        # note: mode_switching_question is re-encoded every time it is asked - no need to fill it here
 
-        # pre-fill dummy versions of thinker / writer output prefix - only used when initializing subsequent prompts
-        prefill_cache_block(self.prompting.thinker_output_prefix, [self.writer_prompt, thinker_output_for_writer_init])
-        prefill_cache_block(self.prompting.writer_output_prefix, [self.thinker_prompt, writer_output_for_thinker_init])
+        thinker_view = (self.input_prompt, self.thinker_extra_prompt, self.thinker_output)
+        writer_view = (self.input_prompt, self.thinker_output, self.writer_output)
+        mode_switching_view = (self.mode_switching_prompt, self.thinker_output, self.writer_output, self.mode_switching_question)
 
-        prefill_cache_block(self.prompting.writer_split, [self.writer_prompt, thinker_output_for_writer_init, self.writer_split])
-        prefill_cache_block(self.prompting.thinker_split, [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split])
-        
-        prefill_cache_block(self.prompting.writer_output_prefix,
-            [self.writer_prompt, thinker_output_for_writer_init, self.writer_split, self.writer_output])
-        prefill_cache_block(self.prompting.thinker_output_prefix,
-            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output])
+        # prepare cache manager for each mode: only thinker, only writer and thinker+writer and mode switching
+        self.cm_thinker_only = shared_cache.SharedCacheManager(cache_structure=[thinker_view])
+        self.cm_writer_only = shared_cache.SharedCacheManager(cache_structure=[writer_view])
+        self.cm_thinker_and_writer = shared_cache.SharedCacheManager(cache_structure=[thinker_view, writer_view])
+        self.cm_mode_switching = shared_cache.SharedCacheManager(cache_structure=[mode_switching_view])
 
-        # Prefill thinker_question
-        prefill_cache_block(self.prompting.mode_switching_question,
-                            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output, self.thinker_question])
-
-        # prepare cache manager for each mode:
-        # only thinker, only writer and thinker+writer in parallel - it is needed to generate in each mode
-        self.cm_thinker_only = shared_cache.SharedCacheManager(
-            cache_structure=[[self.thinker_prompt, self.thinker_split, self.thinker_output]],
-            write_to=[self.thinker_output],
-        )
-
-        self.cm_writer_only = shared_cache.SharedCacheManager(
-            cache_structure=[[self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output]],
-            write_to=[self.writer_output],
-        )
-        self.cm_mode_switching = shared_cache.SharedCacheManager(
-            cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output, self.thinker_question]],
-            write_to=[self.thinker_question],
-        )
-        self.cm_thinker_and_writer = shared_cache.SharedCacheManager(
-            cache_structure=[
-                [self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output],
-                [self.thinker_prompt, self.thinker_split, self.thinker_output],
-            ],
-            write_to=[self.writer_output, self.thinker_output],
-        )
-    
     # To catch and logg state change
     def __setattr__(self, name, value):
         if name == "state":

@@ -1,8 +1,9 @@
 # thinker (t) is worker 0, writer (w) is worker 1, mode switching is queried separately
 # thinker sees:    "{input_prompt}{thinker_extra_prompt}{thinker_output}"
-# writer sees:     "{input_prompt}{thinker_output}{writer_split}{writer_output}
-# mode switching:  "{mode_switching_prompt}{thinker_output}{writer_split}{writer_output}
+# writer sees:     "{input_prompt}{thinker_output}{writer_output}
+# mode switching:  "{mode_switching_prompt}{thinker_output}{writer_output}
 # TODO mode switching does not see the original problem
+# TODO maybe move thinker_extra_prompt into thinker output prefix in the first person?
 
 class AsyncReasoningPrompting:
     def __init__(self, problem):
@@ -10,17 +11,14 @@ class AsyncReasoningPrompting:
 <|im_start|>user
 {problem}
 """.strip() + "\n"
-
-        self.thinker_extra_prompt = "\n" + f"""
+        self.thinker_extra_prompt = f"""
 You are an AI assistant that can think and write outputs concurrently.
 Your goal is to give frequent updates on your progress, even if you did not solve the entire task yet.
 Reason in short paragraphs. Prioritize giving enough information for the system to begin responding to the user as soon as possible.
-<|im_end|>\n<|im_start|>assistant\n<think>\n"""
-
-        self.writer_split = " ... [SYSTEM: thoughts will continue here]\n</think>\n"
-
+""".strip() + "\n"
         # writer_output and thinker_output starts with these prefixes
-        self.writer_output_prefix = f"""\n"""
+        self.thinker_output_prefix = "<|im_end|>\n<|im_start|>assistant\n<think>\n"
+        self.writer_output_prefix = f""" ... [SYSTEM: thoughts will continue here]\n</think>\n"""
 
         self.mode_switching_prompt = f"""
 <|im_start|>user
