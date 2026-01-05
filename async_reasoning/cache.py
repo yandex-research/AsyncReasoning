@@ -7,6 +7,9 @@ from typing import Sequence
 
 
 import logging
+
+from async_reasoning.prompting import AsyncReasoningPrompting
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
@@ -17,7 +20,7 @@ class State(Enum):
 
 class AsyncReasoningCache:
     """Create separate blocks of LLM KV cache that are arranged depending on inference mode (thinker_only, thinker_and_writer, etc)"""
-    def __init__(self, model, tokenizer, prompting, tokenizer_kwargs=dict(), starting_state=State.thinker_only):
+    def __init__(self, model, tokenizer, prompting: AsyncReasoningPrompting, tokenizer_kwargs=dict(), starting_state=State.thinker_only):
         
         self.model = model
         self.tokenizer = tokenizer
@@ -27,21 +30,21 @@ class AsyncReasoningCache:
         self.state = starting_state
 
         # Init all needed cache blocks
-        (self.writer_prompt, self.writer_split, self.writer_output, writer_output_for_thinker_init,
-        self.thinker_prompt, self.thinker_split, self.thinker_output, self.thinker_question, thinker_output_for_writer_init
-        ) = (shared_cache.CacheBlock(config=self.model.config) for _ in range(9))
+        (self.input_prompt, self.thinker_extra_prompt, self.thinker_output, self.writer_split, self.writer_output,
+         self.mode_switching_prompt, self.mode_switching_question) = (
+            shared_cache.CacheBlock(config=self.model.config) for _ in range(7))
 
         def prefill_cache_block(text: str, blocks, write_to=None):
-            if write_to is None:
-                write_to = blocks[-1]
+            write_to = blocks[-1] if write_to is None else write_to
             tmp_cm = shared_cache.SharedCacheManager(cache_structure=[blocks], write_to=[write_to])
             encoded = self.tokenizer(text, **self.tokenizer_kwargs)["input_ids"].to(self.device)
             with torch.inference_mode():
                 self.model(**tmp_cm.get_input_kwargs(encoded))
         
         # encode each prompt section as LLM KV cache for use in generation
-        prefill_cache_block(self.prompting.writer_prompt, [self.writer_prompt]) # <-- writes KV entries to last cache in list
-        prefill_cache_block(self.prompting.thinker_prompt, [self.thinker_prompt])
+
+        prefill_cache_block(self.prompting.input_prompt, [self.input_prompt]) # <-- writes KV entries to last cache in list
+        prefill_cache_block(self.prompting.thinker_extra_prompt, [self.input_prompt, self.thinker_extra_prompt])
 
         # pre-fill dummy versions of thinker / writer output prefix - only used when initializing subsequent prompts
         prefill_cache_block(self.prompting.thinker_output_prefix, [self.writer_prompt, thinker_output_for_writer_init])
@@ -56,15 +59,15 @@ class AsyncReasoningCache:
             [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output])
 
         # Prefill thinker_question
-        prefill_cache_block(self.prompting.thinker_control_question,
-            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output, self.thinker_question])
+        prefill_cache_block(self.prompting.mode_switching_question,
+                            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output, self.thinker_question])
 
         # prepare cache manager for each mode: only thinker and thinker+writer in parallel - it is needed to generate in each mode
         self.cm_thinker_only = shared_cache.SharedCacheManager(
             cache_structure=[[self.thinker_prompt, self.thinker_split, self.thinker_output]],
             write_to=[self.thinker_output],
         )
-        self.cm_thinker_control = shared_cache.SharedCacheManager(
+        self.cm_mode_switching = shared_cache.SharedCacheManager(
             cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output, self.thinker_question]],
             write_to=[self.thinker_question],
         )

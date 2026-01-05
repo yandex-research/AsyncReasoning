@@ -50,22 +50,15 @@ class AsyncReasoningSolver:
 
     @torch.inference_mode()
     def check_if_should_continue_writing(self,
-        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'],
-        prompting: AsyncReasoningPrompting,
-        use_trimming=False) -> bool:
-        if use_trimming:
-            # Trim cache instead of clearing
-            cache.thinker_question.trim_keep_first(25) # Hardcoded question size
-            next_inputs = self.tokenizer(" ", **self.tokenizer_kwargs).to(self.device)
+        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'], prompting: AsyncReasoningPrompting
+     ) -> bool:
+        if self.use_fast_kernel:
+            cache.thinker_question.crop(0)
         else:
-            # Or clear and repopulate cache
-            if self.use_fast_kernel:
-                cache.thinker_question.crop(0)
-            else:
-                cache.thinker_question.clear()
-            next_inputs = self.tokenizer(prompting.thinker_control_question, **self.tokenizer_kwargs).to(self.device)
+            cache.thinker_question.clear()
+        next_inputs = self.tokenizer(prompting.mode_switching_question, **self.tokenizer_kwargs).to(self.device)
 
-        logits = self.model(**cache.cm_thinker_control.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+        logits = self.model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
         probs = logits.softmax(-1)
         yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
         no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
