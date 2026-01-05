@@ -29,5 +29,5 @@ Use the partial response to decide if you added enough new information to write 
 """.strip() + '\n'
 
         # these questions are inserted to change mode depending on model answers
-        self.mode_switching_question = "...\n\nWait, are my current thoughts enough to write the next paragraph or formula? (yes/no): "
+        self.mode_switching_question = "...\n\nWait, let me check if I should pause and wait for thoughts. Are my current thoughts enough to write the next paragraph? (yes/no): "
         self.yes_token, self.no_token = "yes", "no"
