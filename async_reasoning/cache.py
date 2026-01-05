@@ -10,10 +10,11 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
-# state can be "thinker_only" or "thinker_and_writer"
+# state can be "thinker_only" or "thinker_and_writer" or "writer_only"
 class State(Enum):
     thinker_only = 0
     thinker_and_writer = 1
+    writer_only = 2
 
 class AsyncReasoningCache:
     """Create separate blocks of LLM KV cache that are arranged depending on inference mode (thinker_only, thinker_and_writer, etc)"""
@@ -64,6 +65,10 @@ class AsyncReasoningCache:
             cache_structure=[[self.thinker_prompt, self.thinker_split, self.thinker_output]],
             write_to=[self.thinker_output],
         )
+        self.cm_writer_only = shared_cache.SharedCacheManager(
+            cache_structure=[[self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output]],
+            write_to=[self.writer_output],
+        )
         self.cm_thinker_control = shared_cache.SharedCacheManager(
             cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output, self.thinker_question]],
             write_to=[self.thinker_question],
@@ -87,6 +92,8 @@ class AsyncReasoningCache:
         match self.state:
             case State.thinker_only:
                 return self.cm_thinker_only
+            case State.writer_only:
+                return self.cm_thinker_and_writer
             case State.thinker_and_writer:
                 return self.cm_thinker_and_writer
             case _:
