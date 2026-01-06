@@ -517,6 +517,7 @@ class AttentionModuleForQwen3Moe(nn.Module):
                 out=past_key_value.get_att_buffer(rq, layer_idx=self.layer_idx),
             )
 
+        attn_output = attn_output.transpose(1, 2)
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, None
