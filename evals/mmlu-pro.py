@@ -57,6 +57,7 @@ def parse_args():
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/mmlu-pro")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
+    parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
     parser.add_argument("--seed", type=int, default=42, help="Random seed used for subset sampling")
     return parser.parse_args()
 
@@ -82,7 +83,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map="cpu",
+        model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}
