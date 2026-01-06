@@ -152,7 +152,7 @@ def combine_cache_from_structure(cache_structure: Sequence[Sequence[CacheBlock]]
     return collate_kv_with_left_padding(kv_parts)
 
 
-@torch.compile(dynamic=True, disable=bool(int(os.environ.get("HOGWILD_NO_COMPILE", False))))
+@torch.compile(dynamic=True, disable=not bool(int(os.environ.get("USE_TORCH_COMPILE", True))))
 def collate_kv_with_left_padding(
         kv_parts: Sequence[Sequence[Tuple[torch.Tensor, torch.Tensor]]]) -> Tuple[torch.Tensor, torch.Tensor]:
     """

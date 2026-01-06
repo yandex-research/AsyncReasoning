@@ -1,4 +1,6 @@
 import sys
+import warnings
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -50,7 +52,7 @@ def parse_args():
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument("--num-samples", type=int, required=True, help="The size of subset used for evaluation")
+    parser.add_argument("--num-samples", type=int, default=None, help="The size of subset used for evaluation")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/mmlu-pro")
@@ -74,12 +76,13 @@ def main():
     print("OMP_NUM_THREADS:", os.environ["OMP_NUM_THREADS"])
     
     model_name = args.model_name
-    assert model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"\
-    
+    if 'qwen' not in model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map=device,
+        model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map="auto",
     )
 
     solver_kwargs = {}
@@ -105,7 +108,10 @@ def main():
 
     solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_mmlu = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
-    dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
+    if args.num_samples is not None:
+        print(f"Subsampling {args.num_samples} samples (seed={args.seed})")
+        dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
+    print(f"Evaluation dataset size = {len(dataset_mmlu)} samples")
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/mmlu-pro/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
@@ -162,7 +168,7 @@ def main():
         accuracy_numerator += int(is_equal)
         accuracy_denominator += 1
         current_accuracy = (accuracy_numerator / accuracy_denominator)
-        print(f'>>> {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}', file=sys.stderr)
+        print(end=f'[{rank=}] {idx=}, {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}', file=sys.stderr)
         with open(save_path, "w") as f:
             json.dump(result, f, indent=2)
         if "NV_YT_OPERATION_ID" in os.environ and rank == 0 and (

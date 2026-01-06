@@ -33,12 +33,12 @@ There are two ways to evaluate the results: using the same model, or a canonical
 
 **Single GPU MATH-500**
 ```bash
-python -m evals.math500 --start 0 --end 500 --mode async_reasoning --path-to-results ./eval_results/math500 --budget 16384 # if did not compile: add --use-slow-kernel
+python evals/math-500.py --start 0 --end 500 --mode async_reasoning --path-to-results ./eval_results/ --budget 16384 # if did not compile: add --use-slow-kernel
 ```
 
 **GPU-parallel MATH-500**
 ```bash
-CUDA_VISIBLE_DEVICES=1,2,3,4 python3 utils/gpu_parallel.py --start 0 --end 500 --use_queue --script evals/math500.py \
+CUDA_VISIBLE_DEVICES=1,2,3,4 python3 utils/gpu_parallel.py --start 0 --end 500 --use_queue --script evals/math-500.py \
   --extra_args "--mode async_reasoning --budget 16384 --path-to-results ./eval_results/"
 ```
 
@@ -54,7 +54,7 @@ Notes:
 
 The results can be aggregated from the `json` files under `./eval_results` folder. For instance:
 ```bash
-cd ./eval_results/math500/async_reasoning
+cd ./eval_results/math-500/async_reasoning
 python -c "import os, sys, json; fs=[fn for fn in os.listdir('.') if fn.endswith('.json')]; acc = sum(json.load(open(fn))['is_equal'] for fn in fs) / len(fs); print(f'{acc=:.5f}', file=sys.stderr)"
 python -c "import os, sys, json; fs=[fn for fn in os.listdir('.') if fn.endswith('.json')]; total_delay = sum(json.load(open(fn))['metrics']['total_delay'] for fn in fs) / len(fs); print(f'{total_delay=:.5f}', file=sys.stderr)"
 ```

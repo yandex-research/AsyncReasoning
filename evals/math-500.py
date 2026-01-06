@@ -1,4 +1,7 @@
 import sys
+import warnings
+import datasets
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -9,7 +12,6 @@ import argparse
 import torch
 import transformers
 from tqdm import tqdm
-from datasets import load_dataset
 
 from tts_evaluator import TTSEvaluator
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
@@ -50,6 +52,8 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
+    parser.add_argument("--dataset_path", type=str, default=None,
+                        help="optionally override math500 dataset - this should be a path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
     return parser.parse_args()
@@ -63,12 +67,13 @@ def main():
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
-    assert args.model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"
+    if 'qwen' not in args.model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype='auto', device_map=device, low_cpu_mem_usage=True
+        args.model_name, torch_dtype='auto', device_map="auto", low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}
@@ -93,9 +98,13 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_dataset('HuggingFaceH4/MATH-500', split='test')
+    if args.dataset_path is None:
+        dataset_math = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')
+    else:
+        print(f"Overriding benchmark data with {args.dataset_path}")
+        dataset_math = datasets.load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math500/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/math-500/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
