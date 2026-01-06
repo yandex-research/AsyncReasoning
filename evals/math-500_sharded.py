@@ -50,6 +50,8 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
+    parser.add_argument("--dataset_path", type=str, required=True,
+                        help="sharded math500 dataset path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
     parser.add_argument("--next_shard_every_steps", type=int, help="Setting to set up shards appearance frequency. Exceptions are: 0 -- concat, -1 -- never supply the rest of the shards.")
@@ -71,7 +73,6 @@ def main():
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
-    assert args.model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
@@ -103,7 +104,7 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_from_disk("math500_shards_small")
+    dataset_math = load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
