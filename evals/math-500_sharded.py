@@ -105,7 +105,7 @@ def main():
     solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_math = load_from_disk("math500_shards_small")
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math500/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
