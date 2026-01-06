@@ -29,7 +29,7 @@ def prepare_model_for_inference(
             default_device, default_dtype = torch.get_default_device(), torch.get_default_dtype()
             try:
                 for i in range(len(model.model.layers)):
-                    original_mlp = model.model.layers[i].mlp
+                    original_mlp = model.model.layers[i].mlp.cuda()
                     torch.set_default_device(next(original_mlp.parameters()).device)
                     torch.set_default_dtype(next(original_mlp.parameters()).dtype)
                     fused_mlp = Qwen3MoeFusedSparseMoeBlock(model.config)
@@ -48,6 +48,7 @@ def prepare_model_for_inference(
             finally:
                 torch.set_default_device(default_device)
                 torch.set_default_dtype(default_dtype)
+            model.cuda()
     elif model.config.model_type == "qwen3_moe" and not fuse_qwen3_moe_experts:
         assert not quantize_qwen3_moe_experts, "quantizing experts is currently only implemented for fused moe"
         warnings.warn("Using vanilla qwen3_moe without expert fusion / quantization")

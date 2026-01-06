@@ -73,7 +73,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype='auto', device_map="auto", low_cpu_mem_usage=True
+        args.model_name, torch_dtype='auto', device_map="cpu", low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}
