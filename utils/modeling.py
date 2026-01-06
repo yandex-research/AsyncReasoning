@@ -20,7 +20,8 @@ def prepare_model_for_inference(
     if model.config.model_type == "qwen3":
         pass  # no conversion - compile later
     elif model.config.model_type == "qwen3_moe" and fuse_qwen3_moe_experts:
-        warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused")
+        warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused; full-model compile is disabled")
+        use_torch_compile = False if use_torch_compile is None else use_torch_compile
         if quantize_qwen3_moe_experts:
             warnings.warn("Experts will be quantized to bnb 4-bit")
         transformers.utils.generic.OutputRecorder = getattr(transformers.utils.generic, "OutputRecorder", None)
@@ -54,6 +55,7 @@ def prepare_model_for_inference(
     else:
         raise NotImplementedError(f"Unknown model type {model.config.model_type} - you can add it here")
     if use_torch_compile:
+        warnings.warn("Compiling the whole model")
         model = torch.compile(model)
     return model
 
