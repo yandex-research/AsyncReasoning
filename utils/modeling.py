@@ -5,19 +5,24 @@ import os
 import warnings
 
 import torch
+import torch.nn as nn
 import transformers
 
 
 def prepare_model_for_inference(
         model: transformers.PreTrainedModel, *,
         use_torch_compile: bool = bool(int(os.environ.get("USE_TORCH_COMPILE", 1))),
+        fuse_qwen3_moe_experts: bool = bool(int(os.environ.get("FUSE_QWEN3_MOE_EXPERTS", 1))),
+        quantize_qwen3_moe_experts: bool = bool(int(os.environ.get("QUANTIZE_QWEN3_MOE_EXPERTS", 0))),
         **kwargs
 ) -> transformers.PreTrainedModel:
     assert not kwargs, f"unrecognized {kwargs=}"
     if model.config.model_type == "qwen3":
         pass  # no conversion - compile later
-    elif model.config.model_type == "qwen3_moe":
+    elif model.config.model_type == "qwen3_moe" and fuse_qwen3_moe_experts:
         warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused")
+        if quantize_qwen3_moe_experts:
+            warnings.warn("Experts will be quantized to bnb 4-bit")
         transformers.utils.generic.OutputRecorder = getattr(transformers.utils.generic, "OutputRecorder", None)
         from qwen3_moe_fused.modular_qwen3_moe_fused import Qwen3MoeFusedSparseMoeBlock
         with torch.no_grad():
@@ -31,18 +36,76 @@ def prepare_model_for_inference(
                     with torch.no_grad():
                         fused_mlp.gate.weight[...] = original_mlp.gate.weight
                         assert original_mlp.gate.bias is None
-                        fused_mlp.gate_proj.weight[...] = torch.stack(
-                            [e.gate_proj.weight for e in original_mlp.experts])
+                        fused_mlp.gate_proj.weight[...] = torch.stack([e.gate_proj.weight for e in original_mlp.experts])
                         fused_mlp.up_proj.weight[...] = torch.stack([e.up_proj.weight for e in original_mlp.experts])
                         fused_mlp.down_proj.weight[...] = torch.stack(
                             [e.down_proj.weight for e in original_mlp.experts])
+                    if quantize_qwen3_moe_experts:
+                        fused_mlp.gate_proj, fused_mlp.up_proj, fused_mlp.down_proj = map(
+                            quantize_fused_linear, (fused_mlp.gate_proj, fused_mlp.up_proj, fused_mlp.down_proj))
                     model.model.layers[i].mlp = fused_mlp
                     del original_mlp, fused_mlp
             finally:
                 torch.set_default_device(default_device)
                 torch.set_default_dtype(default_dtype)
+    elif model.config.model_type == "qwen3_moe" and not fuse_qwen3_moe_experts:
+        assert not quantize_qwen3_moe_experts, "quantizing experts is currently only implemented for fused moe"
+        warnings.warn("Using vanilla qwen3_moe without expert fusion / quantization")
     else:
         raise NotImplementedError(f"Unknown model type {model.config.model_type} - you can add it here")
     if use_torch_compile:
         model = torch.compile(model)
     return model
+
+
+
+def quantize_fused_linear(
+    fused_linear: nn.Module,
+    compute_dtype: torch.dtype = torch.bfloat16, storage_dtype: torch.dtype = torch.uint8,
+    quant_type: str = "nf4", compress_statistics: bool = True, blocksize: int = 64
+):
+    import bitsandbytes
+    from qwen3_moe_fused.quantize.layer import MoeFusedLinear4bit, MoeFusedLinear
+    assert isinstance(fused_linear, MoeFusedLinear)
+    fused_linear_4bit = MoeFusedLinear4bit(
+        in_features=fused_linear.in_features,
+        out_features=fused_linear.out_features,
+        num_experts=fused_linear.num_experts,
+        compute_dtype=compute_dtype,
+        compress_statistics=compress_statistics,
+        quant_type=quant_type,
+        quant_storage=storage_dtype,
+        device=fused_linear.weight.device,
+    )
+    fused_linear_4bit.weight = bitsandbytes.nn.Params4bit(
+        fused_linear.weight.data,
+        requires_grad=False,
+        quant_type=quant_type,
+        blocksize=blocksize,
+        compress_statistics=compress_statistics,
+        quant_storage=storage_dtype,
+    )
+    fused_linear_4bit = fused_linear_4bit.to(fused_linear.weight.device)
+    fused_linear_4bit.weight.quant_state.code = fused_linear_4bit.weight.quant_state.code.float()
+    return fused_linear_4bit
+
+
+
+# from qwen3_moe_fused.grouped_gemm.forward_4bit import grouped_gemm_forward_4bit
+# from qwen3_moe_fused.grouped_gemm.forward import grouped_gemm_forward
+# class MoeFusedLinear4bitGroupedGemm(MoeFusedLinear4bit):
+#     """Fused linear from multiple 4-bit experts with fused forward"""
+#     def forward(self, x: torch.Tensor, m_sizes: torch.Tensor) -> torch.Tensor:
+#         # TODO: fused kernel currently produces crap
+#         bitsandbytes.nn.modules.fix_4bit_weight_quant_state_from_module(self)
+#         if not self.compute_type_is_set:
+#             self.set_compute_type(x)
+#             self.compute_type_is_set = True
+#         inp_dtype = x.dtype
+#         if self.compute_dtype is not None:
+#             x = x.to(self.compute_dtype)
+#         if x.numel() / x.shape[-1] <= 16:
+#             return grouped_gemm_forward_4bit(x, self.weight, self.weight.quant_state, m_sizes).to(inp_dtype)
+#         else:  # dequantize and multiply
+#             weight = bitsandbytes.functional.dequantize_4bit(self.weight, self.weight.quant_state).to(x.dtype)
+#             return grouped_gemm_forward(x, weight, m_sizes).to(inp_dtype)
