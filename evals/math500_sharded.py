@@ -121,20 +121,18 @@ def main():
         instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
-        live = LiveContextQueue(tokenizer, model.device)
-        def on_token(writer_tokens, thinker_tokens, token_times, eos, state, queue):
+        def on_token(writer_tokens, thinker_tokens, token_times, eos, state):
             if args.next_shard_every_steps <= 0:
                 return
             for target in args.shard_to_target:
-                if queue.push_counter_per_target[target] == 0 and len(thinker_tokens) >= args.next_shard_every_steps:
-                    queue.push_text(f"\n\nADDITIONAL USER INPUT:{problem_shards[0]}\n\n", target=target, defer_until_boundary=True)
+                if solver.live_context_queue.push_counter_per_target[target] == 0 and len(thinker_tokens) >= args.next_shard_every_steps:
+                    solver.live_context_queue.push_text(f"\n\nADDITIONAL USER INPUT:{problem_shards[0]}\n\n", target=target, defer_until_boundary=True)
 
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(
                 problem, 
-                budget=args.budget, 
-                live_context_queue=live, 
+                budget=args.budget,  
                 on_new_tokens_generated=on_token
             )
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])

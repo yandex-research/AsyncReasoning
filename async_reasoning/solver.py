@@ -51,6 +51,7 @@ class AsyncReasoningSolver:
         self.thinker_forbidden_token_ix, self.writer_forbidden_token_ix = thinker_forbidden_token_ix, writer_forbidden_token_ix
         self.end_of_think_token_ix = end_of_think_token_ix
         self.use_fast_kernel = use_fast_kernel
+        self.live_context_queue = LiveContextQueue(tokenizer, model.device)
 
     @torch.inference_mode()
     def check_if_should_continue_writing(self,
@@ -93,11 +94,10 @@ class AsyncReasoningSolver:
         budget: int = 1024,
         on_new_tokens_generated: Optional[
             Callable[
-                [Sequence[int], Sequence[int], tuple[str, float, int], bool, State, "LiveContextQueue"],
+                [Sequence[int], Sequence[int], tuple[str, float, int], bool, State],
                 None,
             ]
         ] = None,
-        live_context_queue: Optional["LiveContextQueue"] = None,
     ):
 
         prompting = AsyncReasoningPrompting(problem)
@@ -111,6 +111,7 @@ class AsyncReasoningSolver:
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
         pending_injections: List["QueuedInjection"] = []
+        self.live_context_queue.zero_counter()
         with torch.inference_mode():
             starting_time = time.perf_counter()
             for step in range(budget):
@@ -153,15 +154,14 @@ class AsyncReasoningSolver:
                     eos_generated = True
 
                 # Inject any user-provided context mid-generation
-                if live_context_queue is not None:
-                    pending_injections.extend(live_context_queue.pop_all())
-                    if pending_injections:
-                        pending_injections = self._apply_pending_injections(
-                            pending_injections,
-                            cache,
-                            writer_output_tokens,
-                            thinker_output_tokens,
-                        )
+                pending_injections.extend(self.live_context_queue.pop_all())
+                if pending_injections:
+                    pending_injections = self._apply_pending_injections(
+                        pending_injections,
+                        cache,
+                        writer_output_tokens,
+                        thinker_output_tokens,
+                    )
 
                 if on_new_tokens_generated is not None:
                     on_new_tokens_generated(
@@ -170,7 +170,6 @@ class AsyncReasoningSolver:
                         token_times,
                         eos_generated,
                         cache.state,
-                        live_context_queue,
                     )
 
                 if eos_generated:
@@ -223,6 +222,9 @@ class LiveContextQueue:
         self._queue: queue.Queue[QueuedInjection] = queue.Queue()
         self.tokenizer = tokenizer
         self.device = device
+        self.zero_counter()
+    
+    def zero_counter(self):
         self.push_counter_per_target = {"writer": 0, "thinker": 0}
 
     def push_text(self, text: str, target: str = "thinker", defer_until_boundary: bool = False):
