@@ -7,7 +7,7 @@ from typing import Sequence
 
 import logging
 
-from utils.patch_model import prepare_model_for_inference
+from utils.modeling import prepare_model_for_inference
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
