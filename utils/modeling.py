@@ -88,24 +88,3 @@ def quantize_fused_linear(
     fused_linear_4bit = fused_linear_4bit.to(fused_linear.weight.device)
     fused_linear_4bit.weight.quant_state.code = fused_linear_4bit.weight.quant_state.code.float()
     return fused_linear_4bit
-
-
-
-# from qwen3_moe_fused.grouped_gemm.forward_4bit import grouped_gemm_forward_4bit
-# from qwen3_moe_fused.grouped_gemm.forward import grouped_gemm_forward
-# class MoeFusedLinear4bitGroupedGemm(MoeFusedLinear4bit):
-#     """Fused linear from multiple 4-bit experts with fused forward"""
-#     def forward(self, x: torch.Tensor, m_sizes: torch.Tensor) -> torch.Tensor:
-#         # TODO: fused kernel currently produces crap
-#         bitsandbytes.nn.modules.fix_4bit_weight_quant_state_from_module(self)
-#         if not self.compute_type_is_set:
-#             self.set_compute_type(x)
-#             self.compute_type_is_set = True
-#         inp_dtype = x.dtype
-#         if self.compute_dtype is not None:
-#             x = x.to(self.compute_dtype)
-#         if x.numel() / x.shape[-1] <= 16:
-#             return grouped_gemm_forward_4bit(x, self.weight, self.weight.quant_state, m_sizes).to(inp_dtype)
-#         else:  # dequantize and multiply
-#             weight = bitsandbytes.functional.dequantize_4bit(self.weight, self.weight.quant_state).to(x.dtype)
-#             return grouped_gemm_forward(x, weight, m_sizes).to(inp_dtype)
