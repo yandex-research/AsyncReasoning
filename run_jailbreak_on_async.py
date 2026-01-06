@@ -43,9 +43,9 @@ def load_prompt(path):
 
 @torch.inference_mode()
 def check_if_should_continue_writing(cache, model, tokenizer, forbidden_ids, kwargs):
-    cache.thinker_question.clear()
-    next_inputs = tokenizer(cache.prompting.thinker_control_question, **kwargs).to(model.device)
-    logits = model(**cache.cm_thinker_control.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+    cache.mode_switching_question.clear()
+    next_inputs = tokenizer(cache.prompting.mode_switching_question, **kwargs).to(model.device)
+    logits = model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
     if forbidden_ids:
         logits[..., forbidden_ids] -= 100
     probs = logits.softmax(-1)

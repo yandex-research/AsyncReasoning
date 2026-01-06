@@ -11,6 +11,9 @@ from async_reasoning.prompting import AsyncReasoningPrompting
 from async_reasoning.cache import State, AsyncReasoningCache
 
 import logging
+
+from utils.modeling import prepare_model_for_inference
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
@@ -24,9 +27,8 @@ class AsyncReasoningSolver:
         end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True,
         use_torch_compile: bool = None,
+        **kwargs
     ):
-        if use_torch_compile is None:
-            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
         if use_fast_kernel:
             from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
@@ -34,8 +36,9 @@ class AsyncReasoningSolver:
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
-        if use_torch_compile:
-            model = torch.compile(model)
+        if use_torch_compile is None:
+            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
+        model = prepare_model_for_inference(model, use_torch_compile=use_torch_compile, **kwargs)
         if forbidden_token_ix:
             assert not (thinker_forbidden_token_ix or writer_forbidden_token_ix)
             thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
@@ -51,22 +54,15 @@ class AsyncReasoningSolver:
 
     @torch.inference_mode()
     def check_if_should_continue_writing(self,
-        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'],
-        prompting: AsyncReasoningPrompting,
-        use_trimming=False) -> bool:
-        if use_trimming:
-            # Trim cache instead of clearing
-            cache.thinker_question.trim_keep_first(25) # Hardcoded question size
-            next_inputs = self.tokenizer(" ", **self.tokenizer_kwargs).to(self.device)
+        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'], prompting: AsyncReasoningPrompting
+     ) -> bool:
+        if self.use_fast_kernel:
+            cache.mode_switching_question.crop(0)
         else:
-            # Or clear and repopulate cache
-            if self.use_fast_kernel:
-                cache.thinker_question.crop(0)
-            else:
-                cache.thinker_question.clear()
-            next_inputs = self.tokenizer(prompting.thinker_control_question, **self.tokenizer_kwargs).to(self.device)
+            cache.mode_switching_question.clear()
+        next_inputs = self.tokenizer(prompting.mode_switching_question, **self.tokenizer_kwargs).to(self.device)
 
-        logits = self.model(**cache.cm_thinker_control.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+        logits = self.model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
         probs = logits.softmax(-1)
         yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
         no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
@@ -78,7 +74,7 @@ class AsyncReasoningSolver:
     def display_tokens(self,
         writer_output_tokens: Sequence[int], 
         thinker_output_tokens: Sequence[int], 
-        state: str,
+        state: State,
         ):
         writer_headers, thinker_headers = ["\n\n## Writer mode\n\n", "\n\n## Thinker mode\n\n"]
         writer_text, thinker_text = [self.tokenizer.decode(seq) for seq in [writer_output_tokens, thinker_output_tokens[4:]]]
@@ -133,15 +129,13 @@ class AsyncReasoningSolver:
                     token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
 
                 elif cache.state == State.thinker_and_writer:
-                    next_inputs = {"input_ids": torch.tensor([writer_output_tokens[-1:], thinker_output_tokens[-1:]], device=self.device)}
-                    input_kwargs = cache.get_input_kwargs(**next_inputs)
-                    logger.debug(f"input_kwargs: {input_kwargs}")
-                    logits = self.model(**input_kwargs).logits[..., -1, :]
-                    logits[0, ..., self.writer_forbidden_token_ix] -= 100
-                    logits[1, ..., self.thinker_forbidden_token_ix] -= 100
-                    writer_next_token, thinker_next_token = logits.argmax(-1)
-                    writer_output_tokens.append(int(writer_next_token))
+                    next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:], writer_output_tokens[-1:]], device=self.device)}
+                    logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+                    logits[0, ..., self.thinker_forbidden_token_ix] -= 100
+                    logits[1, ..., self.writer_forbidden_token_ix] -= 100
+                    thinker_next_token, writer_next_token = logits.argmax(-1)
                     thinker_output_tokens.append(int(thinker_next_token))
+                    writer_output_tokens.append(int(writer_next_token))
                     token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
                     if self.is_end_of_step(writer_output_tokens):  # wait for the thinker's signal to continue
                         cache.state = State.thinker_only
@@ -151,7 +145,7 @@ class AsyncReasoningSolver:
                 if cache.state != State.writer_only and thinker_output_tokens[-1] in self.end_of_think_token_ix:
                     cache.state = State.writer_only
                 if cache.state != State.writer_only and ((step + 1) % 20 == 0 or self.is_end_of_step(thinker_output_tokens)):  # ask thinker if we can continue writing
-                    cache.state = State.thinker_and_writer if self.check_if_should_continue_writing(cache, prompting, use_trimming=False) else State.thinker_only
+                    cache.state = State.thinker_and_writer if self.check_if_should_continue_writing(cache, prompting) else State.thinker_only
 
                 if display_generation_in_real_time:
                     self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)

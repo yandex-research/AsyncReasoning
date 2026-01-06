@@ -11,6 +11,11 @@ More detailed instructions will be added shortly. However, you should be able to
 1. Create a new python environment (conda / venv) - we tested python 3.14.
 2. Install dependencies: `pip install -r ./requirements.txt`.
   - Note that `torch` and `deepspeed` may require custom installation, depending on your hardware.
+  - For **`qwen3-moe`** models, also install:
+     ```
+     pip install git+https://github.com/woct0rdho/transformers-qwen3-moe-fused.git@668dfd5b08ebe7e83d6ce0c48e2246cb0be17ee9
+     pip install bitsandbytes==0.49.0
+     ```
 4. [Optional, but recommended] compile fast GPU kernels:
   - Edit `./inference_lib/pyproject.toml` --- find the following 4 variables: `CUDA_TOOLKIT_ROOT_DIR, CUDA_INCLUDE_DIRS, CUDA_HOME, CMAKE_CUDA_COMPILER`
   - If you are using a custom cuda installation, uncomment `CUDA_TOOLKIT_ROOT_DIR` and point it to the base path of your CUDA installation (e.g. `/usr/local/cuda-12.8`)
