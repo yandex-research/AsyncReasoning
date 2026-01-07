@@ -14,7 +14,7 @@ namespace v21
 constexpr const int SubWarpSize = 8;
 constexpr const int WarpSize = 32;
 
-template<int E, int Ev, int GQA, class scalar_t>
+template<int E, int Ev, int GQA, int GQA_OFFSET, class scalar_t>
 __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
         scalar_t* out, char* workspace, float scale,
         const int* locations, const scalar_t* queries,
@@ -54,7 +54,7 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
     int split = blockIdx.z;
     int splits = gridDim.z;
 
-    int hq = hkv * GQA;
+    int hq = hkv * shape.Hq / shape.Hkv + GQA_OFFSET;  // Adjusted for offset
     ptrdiff_t q_offset = ((w * Hq + hq) * S + s) * E;
 
     constexpr const int VecSize = 16 / sizeof(scalar_t);
@@ -276,7 +276,7 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
 
     int gqa = warp.meta_group_rank();
     if (gqa >= GQA) return;
-    int h = hkv * GQA + gqa;
+    int h = hkv * (shape.Hq / shape.Hkv) + GQA_OFFSET + gqa;  // Adjusted for offset
     int res_base = ((w * Hq + h) * S + s);
     int res_inc = W * Hq * S;
     int res_idx = res_base + split * res_inc;
@@ -372,9 +372,14 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
 
     dim3 grid_dim{(unsigned)shape.Hkv, (unsigned)shape.W * (unsigned)shape.S, (unsigned)splits};
     dim3 block_dim{256, 1, 1};
-    size_t smem = shape.Ev * sizeof(float) * block_dim.x / 32 * (shape.Hq / shape.Hkv);
-    smem += 2 * sizeof(float) * (shape.Hq / shape.Hkv);
+
+    int gqa_ratio = shape.Hq / shape.Hkv;
+    int effective_gqa = (gqa_ratio == 16) ? 8 : gqa_ratio;
+
+    size_t smem = shape.Ev * sizeof(float) * block_dim.x / 32 * effective_gqa;
+    smem += 2 * sizeof(float) * effective_gqa;
     smem = std::max(smem, 2 * (shape.E + shape.Ev) * (block_dim.x / SubWarpSize) * sizeof(scalar_t));
+
     static char* workspace = nullptr;
     static std::size_t workspace_size = 0;
 
@@ -390,29 +395,35 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
 
     if (shape.E == 128 && shape.Ev == 128) {
         if(shape.Hq == shape.Hkv * 5) {
-            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 5, scalar_t>,
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 5, 0, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-            hogwild_attention_gpu_kernel21<128, 128, 5><<<grid_dim, block_dim, smem>>>(
+            hogwild_attention_gpu_kernel21<128, 128, 5, 0><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else if(shape.Hq == shape.Hkv * 2) {
-            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 2, scalar_t>,
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 2, 0, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-            hogwild_attention_gpu_kernel21<128, 128, 2><<<grid_dim, block_dim, smem>>>(
+            hogwild_attention_gpu_kernel21<128, 128, 2, 0><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else if(shape.Hq == shape.Hkv * 4) {
-            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 4, scalar_t>,
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 4, 0, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-            hogwild_attention_gpu_kernel21<128, 128, 4><<<grid_dim, block_dim, smem>>>(
+            hogwild_attention_gpu_kernel21<128, 128, 4, 0><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else if(shape.Hq == shape.Hkv * 8) {
-            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 8, scalar_t>,
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 8, 0, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-            hogwild_attention_gpu_kernel21<128, 128, 8><<<grid_dim, block_dim, smem>>>(
+            hogwild_attention_gpu_kernel21<128, 128, 8, 0><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else if(shape.Hq == shape.Hkv * 16) {
-            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 16, scalar_t>,
+            // Launch kernel twice: once for queries 0-7, once for queries 8-15
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 8, 0, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-            hogwild_attention_gpu_kernel21<128, 128, 16><<<grid_dim, block_dim, smem>>>(
+            hogwild_attention_gpu_kernel21<128, 128, 8, 0><<<grid_dim, block_dim, smem>>>(
+                    out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
+
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 8, 8, scalar_t>,
+                                                      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+            hogwild_attention_gpu_kernel21<128, 128, 8, 8><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else {
             printf("Unsupported GQA\n");
