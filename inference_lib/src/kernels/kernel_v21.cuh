@@ -402,6 +402,7 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
     size_t smem = shape.Ev * sizeof(float) * block_dim.x / 32 * effective_gqa;
     smem += 2 * sizeof(float) * effective_gqa;
     smem = std::max(smem, 2 * (shape.E + shape.Ev) * (block_dim.x / SubWarpSize) * sizeof(scalar_t));
+
     static char* workspace = nullptr;
     static std::size_t workspace_size = 0;
 
