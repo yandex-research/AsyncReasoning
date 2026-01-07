@@ -30,7 +30,14 @@ def prepare_model_for_inference(
             default_device, default_dtype = torch.get_default_device(), torch.get_default_dtype()
             try:
                 for i in range(len(model.model.layers)):
-                    original_mlp = model.model.layers[i].mlp.cuda()
+                    original_mlp = model.model.layers[i].mlp
+                    if quantize_qwen3_moe_experts:  # CPU MoE can optionally be initialized on CPU
+                        try:
+                            target_device = next(p.device for p in original_mlp.parameters() if p.device.type == "cuda")
+                        except StopIteration:
+                            target_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                        original_mlp = original_mlp.to(target_device)
+
                     torch.set_default_device(next(original_mlp.parameters()).device)
                     torch.set_default_dtype(next(original_mlp.parameters()).dtype)
                     fused_mlp = Qwen3MoeFusedSparseMoeBlock(model.config)
