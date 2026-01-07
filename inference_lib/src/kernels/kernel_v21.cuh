@@ -394,6 +394,11 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
             hogwild_attention_gpu_kernel21<128, 128, 5><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
+        } else if(shape.Hq == shape.Hkv * 2) {
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 2, scalar_t>,
+                                                      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+            hogwild_attention_gpu_kernel21<128, 128, 2><<<grid_dim, block_dim, smem>>>(
+                    out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else if(shape.Hq == shape.Hkv * 4) {
             CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 4, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
@@ -403,6 +408,11 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
             CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 8, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
             hogwild_attention_gpu_kernel21<128, 128, 8><<<grid_dim, block_dim, smem>>>(
+                    out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
+        } else if(shape.Hq == shape.Hkv * 16) {
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 16, scalar_t>,
+                                                      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+            hogwild_attention_gpu_kernel21<128, 128, 16><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else {
             printf("Unsupported GQA\n");
