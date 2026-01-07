@@ -56,7 +56,7 @@ def parse_args():
                         help="optionally override math-500 dataset - this should be a path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
-    parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
+    parser.add_argument("--device_map", type=str, default="cpu", help="passed to model.from_pretrained")
     return parser.parse_args()
 
 
