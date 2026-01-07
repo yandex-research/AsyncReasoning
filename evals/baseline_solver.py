@@ -85,9 +85,10 @@ class BaselineSolver:
                 [{"role": "user", "content": problem}],
                 tokenize=False, add_generation_prompt=True, enable_thinking=self.thinker_enabled)
         elif self.model.config.model_type == 'gpt_oss':
+            assert self.thinker_enabled
             text = self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": problem}],
-                tokenize=False, reasoning_effort=("high" if self.thinker_enabled else "low"),
+                tokenize=False, reasoning_effort="medium",
                 add_generation_prompt=True)
         else:
             raise NotImplementedError(f"Unsupported chat template for model type {self.model.config.model_type}.")
