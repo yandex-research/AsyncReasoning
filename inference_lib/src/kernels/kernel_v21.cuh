@@ -1,5 +1,3 @@
-// move reduction back into a separate kernel.
-// in terms of pure kernel times, this is faster
 #include "common.h"
 #include "vec.cuh"
 #include "cuda_check.cuh"
