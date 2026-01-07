@@ -17,6 +17,7 @@ from tts_evaluator import TTSEvaluator
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
 from utils.task_queue import TaskQueue
+from utils.random import fix_seed
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
@@ -59,6 +60,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.0, help="temperature for sampling")
     parser.add_argument("--top-p", type=float, default=0.95, help="top-p for sampling")
     parser.add_argument("--top-k", type=int, default=20, help="top-k for sampling")
+    parser.add_argument("--seed", type=int, default=42, help="random seed")
     return parser.parse_args()
 
 
@@ -68,6 +70,7 @@ def main():
     logger = init_worker_logger()
     logger.info(f'The script was run in the following way:')
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
+    fix_seed(args.seed)
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
     if 'qwen' not in args.model_name.lower():
@@ -124,7 +127,7 @@ def main():
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(
-                problem, 
+                problem,
                 budget=args.budget,
                 temperature=args.temperature,
                 top_p=args.top_p,
