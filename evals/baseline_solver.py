@@ -73,10 +73,13 @@ class BaselineSolver:
         display(Markdown(raw))
 
     def solve(self,
-            problem: str,
-            display_generation_in_real_time: bool = False,
-            budget: int = 1024,
-        ):
+        problem: str,
+        display_generation_in_real_time: bool = False,
+        budget: int = 1024,
+        temperature: float = 0.0,
+        top_p: float = 0.95,
+        top_k: int = 20,
+    ):
         self.display_generation_in_real_time = display_generation_in_real_time
         text = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": problem}],
@@ -93,6 +96,10 @@ class BaselineSolver:
                 max_new_tokens=budget,
                 return_dict_in_generate=True,
                 output_scores=False,
+                temperature=temperature,
+                do_sample=temperature > 0.0,
+                top_p=top_p,
+                top_k=top_k,
             )
             if len(self.token_times) == 0:
                 self.token_times.append(("EMPTY", time.perf_counter() - self.starting_time, self.current_step))

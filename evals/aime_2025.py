@@ -56,6 +56,9 @@ def parse_args():
                         help="optionally override aime_2025 dataset - this should be a path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/aime_2025")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
+    parser.add_argument("--temperature", type=float, default=0.0, help="temperature for sampling")
+    parser.add_argument("--top-p", type=float, default=0.95, help="top-p for sampling")
+    parser.add_argument("--top-k", type=int, default=20, help="top-k for sampling")
     return parser.parse_args()
 
 
@@ -120,7 +123,13 @@ def main():
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
-            solver.solve(problem, budget=args.budget)
+            solver.solve(
+                problem, 
+                budget=args.budget,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k
+            )
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
 

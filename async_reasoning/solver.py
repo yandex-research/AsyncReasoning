@@ -13,6 +13,57 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
+
+def sample_from_logits(
+    logits: torch.Tensor,
+    temperature: float = 0.0,
+    top_k: int = 0,
+    top_p: float = 1.0,
+) -> torch.Tensor:
+    """
+    logits: (..., vocab)
+    returns: (...) token ids
+    Greedy if temperature <= 0 (default).
+    """
+    if temperature is None or temperature <= 0.0:
+        return logits.argmax(dim=-1)
+
+    logits = logits / temperature
+
+    # Top-k filtering
+    if top_k is not None and top_k > 0:
+        k = min(top_k, logits.size(-1))
+        # threshold is the k-th largest logit
+        kth_vals = torch.topk(logits, k, dim=-1).values[..., -1, None]
+        logits = torch.where(logits < kth_vals, torch.full_like(logits, -float("inf")), logits)
+
+    # Top-p (nucleus) filtering
+    if top_p is not None and top_p < 1.0:
+        sorted_logits, sorted_idx = torch.sort(logits, descending=True, dim=-1)
+        sorted_probs = torch.softmax(sorted_logits, dim=-1)
+        cumprobs = torch.cumsum(sorted_probs, dim=-1)
+
+        # mask tokens with cumulative prob above top_p (keep at least 1 token)
+        sorted_mask = cumprobs > top_p
+        sorted_mask[..., 0] = False
+        # shift mask right to keep the first token that exceeds p
+        sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+
+        sorted_logits = torch.where(sorted_mask, torch.full_like(sorted_logits, -float("inf")), sorted_logits)
+
+        # scatter back to original order
+        filtered_logits = torch.full_like(logits, -float("inf"))
+        filtered_logits.scatter_(-1, sorted_idx, sorted_logits)
+        logits = filtered_logits
+
+    probs = torch.softmax(logits, dim=-1)
+    # multinomial expects 2D; flatten batch dims safely
+    orig_shape = probs.shape[:-1]
+    probs_2d = probs.reshape(-1, probs.size(-1))
+    next_ids = torch.multinomial(probs_2d, num_samples=1).squeeze(-1)
+    return next_ids.reshape(orig_shape)
+
+
 class AsyncReasoningSolver:
     def __init__(self,
         model: transformers.PreTrainedModel,
@@ -52,6 +103,7 @@ class AsyncReasoningSolver:
     def check_if_should_continue_writing(self,
         cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'], prompting: AsyncReasoningPrompting
      ) -> bool:
+        # оставляем greedy, чтобы контроль был детерминированным
         if self.use_fast_kernel:
             cache.mode_switching_question.crop(0)
         else:
@@ -87,6 +139,9 @@ class AsyncReasoningSolver:
         problem: str,
         display_generation_in_real_time: bool = False,
         budget: int = 1024,
+        temperature: float = 0.0,  # 0.0 -> greedy (by default)
+        top_p: float = 0.95,        # 1.0 -> отключено
+        top_k: int = 20,            # 0 -> отключено
         on_new_tokens_generated: Optional[
             Callable[
                 [Sequence[int], Sequence[int], tuple[str, float, int], bool, State],
@@ -105,6 +160,7 @@ class AsyncReasoningSolver:
         thinker_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
+
         with torch.inference_mode():
             starting_time = time.perf_counter()
             for step in range(budget):
@@ -112,25 +168,33 @@ class AsyncReasoningSolver:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=self.device)}
                     logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
                     logits[..., self.thinker_forbidden_token_ix] -= 100
-                    thinker_output_tokens.append(int(logits.argmax(-1)))
+
+                    next_id = sample_from_logits(logits, temperature=temperature, top_k=top_k, top_p=top_p)
+                    thinker_output_tokens.append(int(next_id.item()))
 
                 elif cache.state == State.writer_only:
                     next_inputs = {"input_ids": torch.tensor([writer_output_tokens[-1:]], device=self.device)}
                     logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
                     logits[..., self.writer_forbidden_token_ix] -= 100
-                    writer_next_token = logits.argmax(-1)
-                    writer_output_tokens.append(int(writer_next_token))
+
+                    writer_next_token = sample_from_logits(logits, temperature=temperature, top_k=top_k, top_p=top_p)
+                    writer_output_tokens.append(int(writer_next_token.item()))
                     token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
 
                 elif cache.state == State.thinker_and_writer:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:], writer_output_tokens[-1:]], device=self.device)}
                     logits = self.model(**cache.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+
                     logits[0, ..., self.thinker_forbidden_token_ix] -= 100
                     logits[1, ..., self.writer_forbidden_token_ix] -= 100
-                    thinker_next_token, writer_next_token = logits.argmax(-1)
-                    thinker_output_tokens.append(int(thinker_next_token))
-                    writer_output_tokens.append(int(writer_next_token))
+
+                    next_ids = sample_from_logits(logits, temperature=temperature, top_k=top_k, top_p=top_p)
+                    thinker_next_token, writer_next_token = next_ids[0], next_ids[1]
+
+                    thinker_output_tokens.append(int(thinker_next_token.item()))
+                    writer_output_tokens.append(int(writer_next_token.item()))
                     token_times.append((self.tokenizer.decode(writer_next_token.item()), time.perf_counter() - starting_time, step))
+
                     if self.is_end_of_step(writer_output_tokens):  # wait for the thinker's signal to continue
                         cache.state = State.thinker_only
                 else:
@@ -138,7 +202,7 @@ class AsyncReasoningSolver:
                 
                 if cache.state != State.writer_only and thinker_output_tokens[-1] in self.end_of_think_token_ix:
                     cache.state = State.writer_only
-                if cache.state != State.writer_only and ((step + 1) % 20 == 0 or self.is_end_of_step(thinker_output_tokens)):  # ask thinker if we can continue writing
+                if cache.state != State.writer_only and ((step + 1) % 20 == 0 or self.is_end_of_step(thinker_output_tokens)):
                     cache.state = State.thinker_and_writer if self.check_if_should_continue_writing(cache, prompting) else State.thinker_only
 
                 if display_generation_in_real_time:
@@ -157,8 +221,10 @@ class AsyncReasoningSolver:
 
                 if eos_generated:
                     break
+
             if len(token_times) == 0:
                 token_times.append(("EMPTY", time.perf_counter() - starting_time, step))
-        writer_output_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
 
+        writer_output_str = self.tokenizer.decode(writer_output_tokens)
+        thinker_output_str = self.tokenizer.decode(thinker_output_tokens)
         return writer_output_str, thinker_output_str, token_times, eos_generated
