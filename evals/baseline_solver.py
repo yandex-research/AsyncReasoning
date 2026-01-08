@@ -1,22 +1,26 @@
+import os
 import time
 import torch
 import transformers
 from IPython.display import display, Markdown, clear_output
-from typing import Sequence, Union, Tuple, Dict, Any
-
-from async_reasoning.prompting import AsyncReasoningPrompting
+from typing import Sequence
 
 import logging
+
+from utils.modeling import prepare_model_for_inference
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
+
 
 class BaselineSolver:
     def __init__(self,
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        thinker_enabled: bool = True,  
+        thinker_enabled: bool = True,
+        **kwargs
     ):
-        self.model = model
+        self.model = prepare_model_for_inference(model, **kwargs)
         self.device = model.device
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
@@ -89,6 +93,8 @@ class BaselineSolver:
                 return_dict_in_generate=True,
                 output_scores=False,
             )
+            if len(self.token_times) == 0:
+                self.token_times.append(("EMPTY", time.perf_counter() - self.starting_time, self.current_step))
         finally:
             handle.remove()
         return (

@@ -1,4 +1,3 @@
-from enum import Enum
 import torch
 import transformers
 from hogwild.attention import HogwildCache
@@ -20,63 +19,51 @@ class AsyncReasoningCacheFastKernels:
         self.state = starting_state
 
         # Init all needed cache blocks
-        (self.writer_prompt, self.writer_split, self.writer_output, writer_output_for_thinker_init,
-        self.thinker_prompt, self.thinker_split, self.thinker_output, self.thinker_question, thinker_output_for_writer_init
-        ) = (transformers.DynamicCache() for _ in range(9))
+        (
+            self.input_prompt,
+            self.input_block,
+            self.thinker_output,
+            self.writer_output,
+            self.mode_switching_prompt,
+            self.mode_switching_question,
+        ) = (transformers.DynamicCache() for _ in range(6))
 
         def prefill_cache_block(text: str, blocks, write_to=None):
-            if write_to is None:
-                write_to = blocks[-1]
+            write_to = blocks[-1] if write_to is None else write_to
             tmp_cm = HogwildCache(cache_structure=[blocks], write_to=[write_to], model=model)
             encoded = self.tokenizer(text, **self.tokenizer_kwargs)["input_ids"].to(self.device)
             with torch.inference_mode():
                 self.model(**tmp_cm.get_input_kwargs(encoded))
+
+        def init_empty_block(block: transformers.DynamicCache):
+            """Populate block with zero-length caches so it participates in structures without assertions."""
+            tmp_cm = HogwildCache(cache_structure=[[block]], write_to=[block], model=model)
+            dummy = self.tokenizer(" ", **self.tokenizer_kwargs)["input_ids"].to(self.device)
+            with torch.inference_mode():
+                self.model(**tmp_cm.get_input_kwargs(dummy))
+            for i in range(len(block.key_cache)):
+                block.key_cache[i] = block.key_cache[i][..., :0, :].contiguous()
+                block.value_cache[i] = block.value_cache[i][..., :0, :].contiguous()
+            block._seen_tokens = 0
         
         # encode each prompt section as LLM KV cache for use in generation
-        prefill_cache_block(self.prompting.writer_prompt, [self.writer_prompt]) # <-- writes KV entries to last cache in list
-        prefill_cache_block(self.prompting.thinker_prompt, [self.thinker_prompt])
+        prefill_cache_block(self.prompting.input_prompt, [self.input_prompt]) # <-- writes KV entries to last cache in list
+        init_empty_block(self.input_block)
+        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.input_block, self.thinker_output])
+        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.input_block, self.thinker_output, self.writer_output])
+        prefill_cache_block(self.prompting.mode_switching_prompt, [self.mode_switching_prompt])
 
-        # pre-fill dummy versions of thinker / writer output prefix - only used when initializing subsequent prompts
-        prefill_cache_block(self.prompting.thinker_output_prefix, [self.writer_prompt, thinker_output_for_writer_init])
-        prefill_cache_block(self.prompting.writer_output_prefix, [self.thinker_prompt, writer_output_for_thinker_init])
+        thinker_view = (self.input_prompt, self.input_block, self.thinker_output)
+        writer_view = (self.input_prompt, self.input_block, self.thinker_output, self.writer_output)
+        mode_switching_view = (self.mode_switching_prompt, self.input_block, self.thinker_output, self.writer_output, self.mode_switching_question)
 
-        prefill_cache_block(self.prompting.writer_split, [self.writer_prompt, thinker_output_for_writer_init, self.writer_split])
-        prefill_cache_block(self.prompting.thinker_split, [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split])
-        
-        prefill_cache_block(self.prompting.writer_output_prefix,
-            [self.writer_prompt, thinker_output_for_writer_init, self.writer_split, self.writer_output])
-        prefill_cache_block(self.prompting.thinker_output_prefix,
-            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output])
+        # prepare cache manager for each mode: only thinker, only writer and thinker+writer and mode switching
+        self.cm_thinker_only = HogwildCache(cache_structure=[thinker_view], model=model)
+        self.cm_writer_only = HogwildCache(cache_structure=[writer_view], model=model)
+        self.cm_thinker_and_writer = HogwildCache(cache_structure=[thinker_view, writer_view], model=model)
+        self.cm_mode_switching = HogwildCache(cache_structure=[mode_switching_view], model=model)
+        self.cm_input_only = HogwildCache(cache_structure=[[self.input_prompt, self.input_block]], write_to=[self.input_block], model=model)
 
-        # Prefill thinker_question
-        prefill_cache_block(self.prompting.thinker_control_question,
-            [self.thinker_prompt, writer_output_for_thinker_init, self.thinker_split, self.thinker_output, self.thinker_question])
-
-        # prepare cache manager for each mode: only thinker and thinker+writer in parallel - it is needed to generate in each mode
-        self.cm_thinker_only = HogwildCache(
-            cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output]],
-            write_to=[self.thinker_output],
-            model=model,
-        )
-        self.cm_writer_only = HogwildCache(
-            cache_structure=[[self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output]],
-            write_to=[self.writer_output],
-            model=model,
-        )
-        self.cm_thinker_control = HogwildCache(
-            cache_structure=[[self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output, self.thinker_question]],
-            write_to=[self.thinker_question],
-            model=model,
-        )
-        self.cm_thinker_and_writer = HogwildCache(
-            cache_structure=[
-                [self.writer_prompt, self.thinker_output, self.writer_split, self.writer_output],
-                [self.thinker_prompt, self.writer_output, self.thinker_split, self.thinker_output],
-            ],
-            write_to=[self.writer_output, self.thinker_output],
-            model=model,
-        )
-    
     # To catch and logg state change
     def __setattr__(self, name, value):
         if name == "state":
@@ -88,6 +75,8 @@ class AsyncReasoningCacheFastKernels:
         match self.state:
             case State.thinker_only:
                 return self.cm_thinker_only
+            case State.writer_only:
+                return self.cm_writer_only
             case State.thinker_and_writer:
                 return self.cm_thinker_and_writer
             case _:
@@ -97,12 +86,14 @@ class AsyncReasoningCacheFastKernels:
         return self.cache_manager.get_input_kwargs(**kwargs)
 
     def append_tokens(self, target: str, token_ids: torch.Tensor):
-        """Append pre-tokenized ids to writer or thinker caches so generation can consume them mid-stream."""
-        if target not in ("writer", "thinker"):
-            raise ValueError(f"target must be 'writer' or 'thinker', got {target}")
+        """Append pre-tokenized ids to writer, thinker, or input caches so generation can consume them mid-stream."""
+        if target not in ("writer", "thinker", "input"):
+            raise ValueError(f"target must be 'writer', 'thinker', or 'input', got {target}")
         token_ids = token_ids.to(self.device)
         if target == "writer":
             input_kwargs = self.cm_writer_only.get_input_kwargs(token_ids)
+        elif target == "input":
+            input_kwargs = self.cm_input_only.get_input_kwargs(token_ids)
         else:
             input_kwargs = self.cm_thinker_only.get_input_kwargs(token_ids)
         with torch.inference_mode():

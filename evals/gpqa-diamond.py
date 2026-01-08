@@ -1,4 +1,6 @@
-import sys; 
+import sys;
+import warnings
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -56,6 +58,7 @@ def parse_args():
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/gpqa-diamond")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
+    parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
     parser.add_argument("--seed", type=int, default=42, help="Random seed used for option shuffling")
     return parser.parse_args()
 
@@ -75,12 +78,13 @@ def main():
     print("OMP_NUM_THREADS:", os.environ["OMP_NUM_THREADS"])
     
     model_name = args.model_name
-    assert model_name == "Qwen/Qwen3-32B", "We are yet to support forbidden token ids for other models"\
+    if 'qwen' not in model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map=device,
+        model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True,
     )
 
     solver_kwargs = {}
@@ -88,11 +92,13 @@ def main():
         from async_reasoning.solver import AsyncReasoningSolver as Solver
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
         writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
-        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
+        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
+        end_of_think_token_ix = [tokenizer.vocab[x] for x in ["</think>"]]
         solver_kwargs.update({
             "writer_forbidden_token_ix": writer_forbidden_token_ix,
             "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
             "use_fast_kernel": use_fast_kernel,
+            "end_of_think_token_ix": end_of_think_token_ix,
         })
     elif mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
