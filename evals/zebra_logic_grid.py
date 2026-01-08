@@ -118,10 +118,8 @@ def make_correct_answer(sample: dict) -> dict:
     columns = solution["header"]
     assert columns[0] == "House"
     solution_table = {}
-    this_total_cells=0
     for i in range(num_houses):
         solution_table[f'House {i+1}'] = {columns[j]: solution["rows"][i][j] for j in range(1, len(columns))}
-        this_total_cells += len(columns) - 1
     return dict(reasoning="REFERENCE ANSWER", solution=solution_table)
 
 
@@ -266,10 +264,8 @@ def main():
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)
-        response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
-
-        is_equal = evaluate_solution(sample, response) if response else False
+        is_equal = evaluate_solution(sample, writer_output_str)
 
         chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5,
                                                return_audio=False)
@@ -281,7 +277,7 @@ def main():
             "metrics": metrics,
             "token_times": token_times,
             "eos_generated": eos_generated,
-            "response_answers": response,
+            "response_answers": extract_last_complete_json(writer_output_str),
             "correct_answer": make_correct_answer(sample),
             "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
