@@ -70,6 +70,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.0, help="temperature for sampling")
     parser.add_argument("--top-p", type=float, default=0.95, help="top-p for sampling")
     parser.add_argument("--top-k", type=int, default=20, help="top-k for sampling")
+    parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
     parser.add_argument("--seed", type=int, default=42, help="random seed")
     return parser.parse_args()
 
@@ -89,7 +90,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype='auto', device_map="auto", low_cpu_mem_usage=True
+        args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}
