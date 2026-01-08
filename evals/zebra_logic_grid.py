@@ -118,10 +118,8 @@ def make_correct_answer(sample: dict) -> dict:
     columns = solution["header"]
     assert columns[0] == "House"
     solution_table = {}
-    this_total_cells=0
     for i in range(num_houses):
         solution_table[f'House {i+1}'] = {columns[j]: solution["rows"][i][j] for j in range(1, len(columns))}
-        this_total_cells += len(columns) - 1
     return dict(reasoning="REFERENCE ANSWER", solution=solution_table)
 
 
@@ -153,6 +151,8 @@ def evaluate_solution(sample: dict, response: str) -> bool:
                     raise ValueError(f"Unknown type: {type(prediction_table[house][column])}")
                 if truth_cell.lower().strip() == predicted_cell.lower().strip():
                     this_correct_cells += 1
+
+    print(end=f"{prediction_table=}\n{solution_table=}\n{this_correct_cells=} {this_total_cells=}")
     return this_correct_cells == this_total_cells
 ###### end borrowed ZebraLogic evaluation protocol
 
