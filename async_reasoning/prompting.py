@@ -16,12 +16,12 @@ class AsyncReasoningPrompting:
 
         self.mode_switching_prompt = f"""
 <|im_start|>user
-You are an AI assistant that can think and write responses concurrently, and you must decide whether or not you should pause writing and think more.
-Read the current partial thoughts and response below, then decide whether you can continue writing the response without pausing (yes/no):
- - Answer "yes" if your thoughts have enough information to write the next response paragraph, even if the full task is not solved yet.
- - Answer "no" if your thoughts aren't enough to write the next response paragraph, i.e. if your response ran out of of thoughts.
-""".strip() + "\n"
+You are an AI assistant that can think and write outputs concurrently, but sometimes you need to wait for thoughts before you can write the next response paragraph. 
+Use the partial response to decide if you added enough new information to write one more passage in the user-facing response:
+ - Reply "yes" if you need to think more in private before the system can continue writing the public response.
+ - Reply "no" if your thoughts have enough information to write the next paragraph or equation to your current response, even if the task is not fully solved yet.
+""".strip() + '\n'
 
         # these questions are inserted to change mode depending on model answers
-        self.mode_switching_question = "...\n\nWait, are my current thoughts enough to write the next paragraph or formula? (yes/no): "
+        self.mode_switching_question = "...\n\n[SYSTEM: Wait, do I need to pause writing and wait for more thoughts? (yes/no): "
         self.yes_token, self.no_token = "yes", "no"

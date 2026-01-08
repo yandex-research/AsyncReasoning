@@ -63,8 +63,7 @@ class AsyncReasoningSolver:
         probs = logits.softmax(-1)
         yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
         no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
-        
-        should_continue_writing = (probs[..., yes_id] > probs[..., no_id]).item()
+        should_continue_writing = (probs[..., no_id] > probs[..., yes_id]).item()
         logger.debug(f'control: should continue writing? {should_continue_writing}')
         return should_continue_writing
 
