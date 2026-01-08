@@ -64,204 +64,217 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
     using full_vec_t = GenericVector<scalar_t, VecSize>;
     using full_fvec_t = GenericVector<float, VecSize>;
     using qk_cache_t = GenericVector<float, E / SubWarpSize>;
-    qk_cache_t q_cache[GQA];
+
+    // For GQA > 8, we process in chunks
+    constexpr int EffectiveGQA = (GQA > 8) ? 8 : GQA;
+    constexpr int NumChunks = (GQA > 8) ? ((GQA + 7) / 8) : 1;
+
+    qk_cache_t q_cache[EffectiveGQA];
 
     // combine values
     using v_cache_t = GenericVector<float, Ev / SubWarpSize>;
-    v_cache_t v_cache[GQA];
-    float maximum[GQA];
-    for (int gqa = 0; gqa < GQA; ++gqa) {
-        v_cache[gqa] = v_cache_t::zeros();
-        maximum[gqa] = std::numeric_limits<float>::lowest();
-    }
-
-    // determine maximum and online logsumexp
-    float lse[GQA] = {};
-    {
-        full_vec_t* keys_lookahead = reinterpret_cast<full_vec_t*>(scratch);
-        full_vec_t* vals_lookahead = keys_lookahead + 2 * VPH_k * 256;
-
-        for (int f = 0; f < shape.F; ++f) {
-            int q_loc = locations[(f * W + w) * S + s];
-            int L = fragment_lengths[f];
-            int maxL = std::min(L, q_loc + 1);
-
-            for (int gqa = 0; gqa < GQA; ++gqa) {
-                for (int ee = 0; ee < VPH_k; ++ee) {
-                    int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
-                    full_vec_t qv = full_vec_t::load(queries + f * q_stride + q_offset + gqa * S * E + e);
-                    for (int j = 0; j < VecSize; ++j) {
-                        q_cache[gqa][ee * VecSize + j] = qv[j];
-                    }
-                }
-            }
-
-            const scalar_t* value_fragment = value_fragments[f];
-            const scalar_t* key_fragment = key_fragments[f];
-
-            const int StepSize = SubWarpMetaSize * splits;
-            auto ldg_sts = [&](int stage, int l) {
-                if (l >= maxL) return;
-                ptrdiff_t k_offset = (hkv * L + l) * E;
-                ptrdiff_t v_offset = (hkv * L + l) * Ev;
-                for (int ee = 0; ee < VPH_k; ++ee) {
-                    int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
-                    __pipeline_memcpy_async(keys_lookahead + (stage * VPH_k + ee) * 256 + threadIdx.x,
-                                            key_fragment + k_offset + e, sizeof(full_vec_t));
-                }
-                for (int ee = 0; ee < VPH_v; ++ee) {
-                    int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
-                    __pipeline_memcpy_async(vals_lookahead + (stage * VPH_v + ee) * 256 + threadIdx.x,
-                                            value_fragment + v_offset + e, sizeof(full_vec_t));
-                }
-            };
-
-            int stage = 0;
-            ldg_sts(0, sub_warp.meta_group_rank() * splits + split);
-            __pipeline_commit();
-            ldg_sts(1, sub_warp.meta_group_rank() * splits + split + StepSize);
-            __pipeline_commit();
-
-            for (int ll = split; ll < maxL; ll += StepSize) {
-                int l = ll + sub_warp.meta_group_rank() * splits;
-                qk_cache_t keys;
-                v_cache_t vals;
-                __pipeline_wait_prior(1);
-                if (l >= maxL) continue;
-                unsigned mask = __activemask();
-
-                for (int ee = 0; ee < VPH_k; ++ee) {
-                    full_vec_t tmp = keys_lookahead[(stage * VPH_k + ee) * 256 + threadIdx.x];
-                    for (int j = 0; j < VecSize; ++j) {
-                        keys[ee * VecSize + j] = (float)tmp[j];
-                    }
-                }
-                for (int ee = 0; ee < VPH_v; ++ee) {
-                    full_vec_t tmp = vals_lookahead[(stage * VPH_v + ee) * 256 + threadIdx.x];
-                    for (int j = 0; j < VecSize; ++j) {
-                        vals[ee * VecSize + j] = (float)tmp[j];
-                    }
-                }
-
-                ldg_sts((stage + 2) % 2, l + 2 * StepSize);
-                stage = (stage + 1) % 2;
-                __pipeline_commit();
-
-                float qk[GQA] = {};
-                #pragma unroll
-                for (int gqa = 0; gqa < GQA; ++gqa) {
-                    for (int ee = 0; ee < VPH_k; ++ee) {
-                        for (int j = 0; j < VecSize; ++j) {
-                            qk[gqa] += q_cache[gqa][ee * VecSize + j] * keys[ee * VecSize + j];
-                        }
-                    }
-                }
-
-                // important: By having the warp shuffles together like this in a separate loop,
-                // the compiler ends up generating better sequenced assembly, where we first initiate a
-                // bunch of shuffles and only then do the addition, hiding the latency much better
-                // than in the single-loop version.
-                #pragma unroll
-                for (int gqa = 0; gqa < GQA; ++gqa) {
-                    qk[gqa] += __shfl_xor_sync(mask, qk[gqa], 0b0100, 8);
-                    qk[gqa] += __shfl_xor_sync(mask, qk[gqa], 0b0010, 8);
-                    qk[gqa] += __shfl_xor_sync(mask, qk[gqa], 0b0001, 8);
-                }
-
-                #pragma unroll
-                for (int gqa = 0; gqa < GQA; ++gqa) {
-                    if (qk[gqa] > maximum[gqa]) {
-                        float rescale = std::exp2f(l2scale * (maximum[gqa] - qk[gqa]));
-                        for (int j = 0; j < v_cache_t::size; ++j) {
-                            v_cache[gqa][j] *= rescale;
-                        }
-                        lse[gqa] *= rescale;
-                        maximum[gqa] = qk[gqa];
-                    }
-                    float att = std::exp2f(l2scale * (qk[gqa] - maximum[gqa]));
-                    lse[gqa] += std::exp2f(l2scale * (qk[gqa] - maximum[gqa]));
-
-                    for (int ee = 0; ee < VPH_v; ++ee) {
-                        for (int j = 0; j < VecSize; ++j) {
-                            v_cache[gqa][ee * VecSize + j] += att * vals[ee * VecSize + j];
-                        }
-                    }
-                }
-            }
-            __pipeline_wait_prior(0);
-        }
-    }
+    v_cache_t v_cache[EffectiveGQA];
+    float maximum[EffectiveGQA];
+    float lse[EffectiveGQA];
 
     using vec_t = GenericVector<scalar_t, 4>;
     using fvec_t = GenericVector<float, 4>;
     using stats_t = GenericVector<float, 2>;
 
-    __syncthreads();
-    // Each sub-warp stores its local softmax statistics to shared memory
-    #pragma unroll
-    for (int gqa = 0; gqa < GQA; ++gqa) {
-        // combine split-k results
-        if (sub_warp.thread_rank() == 0) {
-            stats_t data;
-            data[0] = maximum[gqa];
-            data[1] = lse[gqa];
-            data.store(scratch + 2 * sub_warp.meta_group_rank() + 2 * WarpSize * gqa);
-        }
-    }
+    // Process in chunks for GQA > 8
+    for (int chunk = 0; chunk < NumChunks; ++chunk) {
+        int chunk_start = chunk * 8;
+        int chunk_size = (GQA > 8) ? min(8, GQA - chunk_start) : GQA;
 
-    __syncthreads();
-
-    // Reduce stats over the entire block
-    #pragma unroll
-    for (int gqa = 0; gqa < GQA; ++gqa) {
-        float r_max = maximum[gqa];
-        float l_max = maximum[gqa];
-        float r_lse = 0;
-        if (warp.thread_rank() < SubWarpMetaSize) {
-            stats_t data = stats_t::load(scratch + 2 * warp.thread_rank() + 2 * WarpSize * gqa);
-            r_max = data[0];
-            r_lse = data[1];
+        // Initialize for this chunk
+        for (int gqa = 0; gqa < chunk_size; ++gqa) {
+            v_cache[gqa] = v_cache_t::zeros();
+            maximum[gqa] = std::numeric_limits<float>::lowest();
+            lse[gqa] = 0;
         }
 
-        maximum[gqa] = cg::reduce(warp, r_max, cg::greater<float>{});
-        r_lse *= std::exp2f(l2scale * (r_max - maximum[gqa]));
-        lse[gqa] = cg::reduce(warp, r_lse, cg::plus<float>{});
+        // determine maximum and online logsumexp
+        {
+            full_vec_t* keys_lookahead = reinterpret_cast<full_vec_t*>(scratch);
+            full_vec_t* vals_lookahead = keys_lookahead + 2 * VPH_k * 256;
 
-        // Note: It *is* possible that no thread in this warp had any valid position (due to causal masking),
-        // which would lead to division by zero -> 0 * inf = NaN here.
-        if (lse[gqa] != 0) {
-            float rescale = std::exp2f(l2scale * (l_max - maximum[gqa])) / lse[gqa];
-            for (int j = 0; j < v_cache_t::size; ++j) {
-                v_cache[gqa][j] *= rescale;
+            for (int f = 0; f < shape.F; ++f) {
+                int q_loc = locations[(f * W + w) * S + s];
+                int L = fragment_lengths[f];
+                int maxL = std::min(L, q_loc + 1);
+
+                for (int gqa = 0; gqa < chunk_size; ++gqa) {
+                    for (int ee = 0; ee < VPH_k; ++ee) {
+                        int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
+                        full_vec_t qv = full_vec_t::load(queries + f * q_stride + q_offset + (chunk_start + gqa) * S * E + e);
+                        for (int j = 0; j < VecSize; ++j) {
+                            q_cache[gqa][ee * VecSize + j] = qv[j];
+                        }
+                    }
+                }
+
+                const scalar_t* value_fragment = value_fragments[f];
+                const scalar_t* key_fragment = key_fragments[f];
+
+                const int StepSize = SubWarpMetaSize * splits;
+                auto ldg_sts = [&](int stage, int l) {
+                    if (l >= maxL) return;
+                    ptrdiff_t k_offset = (hkv * L + l) * E;
+                    ptrdiff_t v_offset = (hkv * L + l) * Ev;
+                    for (int ee = 0; ee < VPH_k; ++ee) {
+                        int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
+                        __pipeline_memcpy_async(keys_lookahead + (stage * VPH_k + ee) * 256 + threadIdx.x,
+                                                key_fragment + k_offset + e, sizeof(full_vec_t));
+                    }
+                    for (int ee = 0; ee < VPH_v; ++ee) {
+                        int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
+                        __pipeline_memcpy_async(vals_lookahead + (stage * VPH_v + ee) * 256 + threadIdx.x,
+                                                value_fragment + v_offset + e, sizeof(full_vec_t));
+                    }
+                };
+
+                int stage = 0;
+                ldg_sts(0, sub_warp.meta_group_rank() * splits + split);
+                __pipeline_commit();
+                ldg_sts(1, sub_warp.meta_group_rank() * splits + split + StepSize);
+                __pipeline_commit();
+
+                for (int ll = split; ll < maxL; ll += StepSize) {
+                    int l = ll + sub_warp.meta_group_rank() * splits;
+                    qk_cache_t keys;
+                    v_cache_t vals;
+                    __pipeline_wait_prior(1);
+                    if (l >= maxL) continue;
+                    unsigned mask = __activemask();
+
+                    for (int ee = 0; ee < VPH_k; ++ee) {
+                        full_vec_t tmp = keys_lookahead[(stage * VPH_k + ee) * 256 + threadIdx.x];
+                        for (int j = 0; j < VecSize; ++j) {
+                            keys[ee * VecSize + j] = (float)tmp[j];
+                        }
+                    }
+                    for (int ee = 0; ee < VPH_v; ++ee) {
+                        full_vec_t tmp = vals_lookahead[(stage * VPH_v + ee) * 256 + threadIdx.x];
+                        for (int j = 0; j < VecSize; ++j) {
+                            vals[ee * VecSize + j] = (float)tmp[j];
+                        }
+                    }
+
+                    ldg_sts((stage + 2) % 2, l + 2 * StepSize);
+                    stage = (stage + 1) % 2;
+                    __pipeline_commit();
+
+                    float qk[EffectiveGQA] = {};
+                    #pragma unroll
+                    for (int gqa = 0; gqa < chunk_size; ++gqa) {
+                        for (int ee = 0; ee < VPH_k; ++ee) {
+                            for (int j = 0; j < VecSize; ++j) {
+                                qk[gqa] += q_cache[gqa][ee * VecSize + j] * keys[ee * VecSize + j];
+                            }
+                        }
+                    }
+
+                    // important: By having the warp shuffles together like this in a separate loop,
+                    // the compiler ends up generating better sequenced assembly, where we first initiate a
+                    // bunch of shuffles and only then do the addition, hiding the latency much better
+                    // than in the single-loop version.
+                    #pragma unroll
+                    for (int gqa = 0; gqa < chunk_size; ++gqa) {
+                        qk[gqa] += __shfl_xor_sync(mask, qk[gqa], 0b0100, 8);
+                        qk[gqa] += __shfl_xor_sync(mask, qk[gqa], 0b0010, 8);
+                        qk[gqa] += __shfl_xor_sync(mask, qk[gqa], 0b0001, 8);
+                    }
+
+                    #pragma unroll
+                    for (int gqa = 0; gqa < chunk_size; ++gqa) {
+                        if (qk[gqa] > maximum[gqa]) {
+                            float rescale = std::exp2f(l2scale * (maximum[gqa] - qk[gqa]));
+                            for (int j = 0; j < v_cache_t::size; ++j) {
+                                v_cache[gqa][j] *= rescale;
+                            }
+                            lse[gqa] *= rescale;
+                            maximum[gqa] = qk[gqa];
+                        }
+                        float att = std::exp2f(l2scale * (qk[gqa] - maximum[gqa]));
+                        lse[gqa] += std::exp2f(l2scale * (qk[gqa] - maximum[gqa]));
+
+                        for (int ee = 0; ee < VPH_v; ++ee) {
+                            for (int j = 0; j < VecSize; ++j) {
+                                v_cache[gqa][ee * VecSize + j] += att * vals[ee * VecSize + j];
+                            }
+                        }
+                    }
+                }
+                __pipeline_wait_prior(0);
             }
         }
 
-        if (threadIdx.x == 0) {
-            stats_t data;
-            data[0] = maximum[gqa];
-            data[1] = lse[gqa];
-            data.store(scratch + GQA * 256 / WarpSize * Ev + gqa * 2);
-        }
-
-        // now reduce value across subwarp within a warp
-        for (int ee = 0; ee < VPH_v; ++ee) {
-            for (int j = 0; j < VecSize; ++j) {
-                float v = v_cache[gqa][ee * VecSize + j];
-                static_assert(SubWarpSize == 8);
-                v += __shfl_xor_sync(0xffffffff, v, 0b10000, WarpSize);
-                v += __shfl_xor_sync(0xffffffff, v, 0b01000, WarpSize);
-                v_cache[gqa][ee * VecSize + j] = v;
-            }
-        }
-    }
-
-    __syncthreads();
-
-    // we've reduced within one warp, so now only one subwarp per warp has
-    // to write global results
-    if (sub_warp.meta_group_rank() % (WarpSize / SubWarpSize) == 0) {
+        __syncthreads();
+        // Each sub-warp stores its local softmax statistics to shared memory
         #pragma unroll
-        for (int gqa = 0; gqa < GQA; ++gqa) {
+        for (int gqa = 0; gqa < chunk_size; ++gqa) {
+            // combine split-k results
+            if (sub_warp.thread_rank() == 0) {
+                stats_t data;
+                data[0] = maximum[gqa];
+                data[1] = lse[gqa];
+                data.store(scratch + 2 * sub_warp.meta_group_rank() + 2 * WarpSize * gqa);
+            }
+        }
+
+        __syncthreads();
+
+        // Reduce stats over the entire block
+        #pragma unroll
+        for (int gqa = 0; gqa < chunk_size; ++gqa) {
+            float r_max = maximum[gqa];
+            float l_max = maximum[gqa];
+            float r_lse = 0;
+            if (warp.thread_rank() < SubWarpMetaSize) {
+                stats_t data = stats_t::load(scratch + 2 * warp.thread_rank() + 2 * WarpSize * gqa);
+                r_max = data[0];
+                r_lse = data[1];
+            }
+
+            maximum[gqa] = cg::reduce(warp, r_max, cg::greater<float>{});
+            r_lse *= std::exp2f(l2scale * (r_max - maximum[gqa]));
+            lse[gqa] = cg::reduce(warp, r_lse, cg::plus<float>{});
+
+            // Note: It *is* possible that no thread in this warp had any valid position (due to causal masking),
+            // which would lead to division by zero -> 0 * inf = NaN here.
+            if (lse[gqa] != 0) {
+                float rescale = std::exp2f(l2scale * (l_max - maximum[gqa])) / lse[gqa];
+                for (int j = 0; j < v_cache_t::size; ++j) {
+                    v_cache[gqa][j] *= rescale;
+                }
+            }
+
+            if (threadIdx.x == 0) {
+                stats_t data;
+                data[0] = maximum[gqa];
+                data[1] = lse[gqa];
+                data.store(scratch + EffectiveGQA * 256 / WarpSize * Ev + gqa * 2);
+            }
+
+            // now reduce value across subwarp within a warp
+            for (int ee = 0; ee < VPH_v; ++ee) {
+                for (int j = 0; j < VecSize; ++j) {
+                    float v = v_cache[gqa][ee * VecSize + j];
+                    static_assert(SubWarpSize == 8);
+                    v += __shfl_xor_sync(0xffffffff, v, 0b10000, WarpSize);
+                    v += __shfl_xor_sync(0xffffffff, v, 0b01000, WarpSize);
+                    v_cache[gqa][ee * VecSize + j] = v;
+                }
+            }
+        }
+
+        __syncthreads();
+
+        // we've reduced within one warp, so now only one subwarp per warp has
+        // to write global results
+        if (sub_warp.meta_group_rank() % (WarpSize / SubWarpSize) == 0) {
+            #pragma unroll
+            for (int gqa = 0; gqa < chunk_size; ++gqa) {
                 for (int ee = 0; ee < VPH_v; ++ee) {
                     int e = (ee * SubWarpSize + sub_warp.thread_rank()) * VecSize;
                     full_fvec_t store;
@@ -271,36 +284,47 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
                     store.store(scratch + e + Ev * sub_warp.meta_group_rank() / (WarpSize / SubWarpSize) + gqa * 256 / WarpSize * Ev);
                 }
             }
-    }
-    __syncthreads();
-
-    int gqa = warp.meta_group_rank();
-    if (gqa >= GQA) return;
-    int h = hkv * GQA + gqa;
-    int res_base = ((w * Hq + h) * S + s);
-    int res_inc = W * Hq * S;
-    int res_idx = res_base + split * res_inc;
-    float* global_accumulator = reinterpret_cast<float*>(workspace);
-    float* lse_target = global_accumulator + W * Hq * S * Ev * splits;
-
-    stats_t data = stats_t::load(scratch + GQA * 256 / WarpSize * Ev + gqa * 2);
-    float own_lse = data[1];
-    float own_max = data[0];
-    own_lse = std::log2(own_lse) + l2scale * own_max;
-
-    for (int e = vec_t::size * warp.thread_rank(); e < Ev; e += vec_t::size * warp.size()) {
-        // merge the local results
-        fvec_t res = fvec_t::zeros();
-        for (int j = 0; j < SubWarpMetaSize / (WarpSize / SubWarpSize); ++j) {
-            fvec_t sv = fvec_t::load(scratch + e + Ev * j + gqa * 256 / WarpSize * Ev);
-            for (int jj = 0; jj < vec_t::size; ++jj) {
-                res[jj] += sv[jj];
-            }
         }
-        res.store(global_accumulator + res_idx * Ev + e);
-    }
+        __syncthreads();
 
-    lse_target[res_idx] = own_lse;
+        int gqa_local = warp.meta_group_rank();
+        if (gqa_local >= chunk_size) {
+            if (chunk + 1 < NumChunks) {
+                __syncthreads();
+            }
+            continue;
+        }
+
+        int h = hkv * GQA + chunk_start + gqa_local;
+        int res_base = ((w * Hq + h) * S + s);
+        int res_inc = W * Hq * S;
+        int res_idx = res_base + split * res_inc;
+        float* global_accumulator = reinterpret_cast<float*>(workspace);
+        float* lse_target = global_accumulator + W * Hq * S * Ev * splits;
+
+        stats_t data = stats_t::load(scratch + EffectiveGQA * 256 / WarpSize * Ev + gqa_local * 2);
+        float own_lse = data[1];
+        float own_max = data[0];
+        own_lse = std::log2(own_lse) + l2scale * own_max;
+
+        for (int e = vec_t::size * warp.thread_rank(); e < Ev; e += vec_t::size * warp.size()) {
+            // merge the local results
+            fvec_t res = fvec_t::zeros();
+            for (int j = 0; j < SubWarpMetaSize / (WarpSize / SubWarpSize); ++j) {
+                fvec_t sv = fvec_t::load(scratch + e + Ev * j + gqa_local * 256 / WarpSize * Ev);
+                for (int jj = 0; jj < vec_t::size; ++jj) {
+                    res[jj] += sv[jj];
+                }
+            }
+            res.store(global_accumulator + res_idx * Ev + e);
+        }
+
+        lse_target[res_idx] = own_lse;
+
+        if (chunk + 1 < NumChunks) {
+            __syncthreads();
+        }
+    }
 }
 
 
@@ -372,9 +396,13 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
 
     dim3 grid_dim{(unsigned)shape.Hkv, (unsigned)shape.W * (unsigned)shape.S, (unsigned)splits};
     dim3 block_dim{256, 1, 1};
-    size_t smem = shape.Ev * sizeof(float) * block_dim.x / 32 * (shape.Hq / shape.Hkv);
-    smem += 2 * sizeof(float) * (shape.Hq / shape.Hkv);
+
+    // For GQA > 8, we only need memory for 8 queries at a time
+    int effective_gqa = (shape.Hq / shape.Hkv > 8) ? 8 : (shape.Hq / shape.Hkv);
+    size_t smem = shape.Ev * sizeof(float) * block_dim.x / 32 * effective_gqa;
+    smem += 2 * sizeof(float) * effective_gqa;
     smem = std::max(smem, 2 * (shape.E + shape.Ev) * (block_dim.x / SubWarpSize) * sizeof(scalar_t));
+
     static char* workspace = nullptr;
     static std::size_t workspace_size = 0;
 
@@ -394,6 +422,11 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
             hogwild_attention_gpu_kernel21<128, 128, 5><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
+        } else if(shape.Hq == shape.Hkv * 2) {
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 2, scalar_t>,
+                                                      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+            hogwild_attention_gpu_kernel21<128, 128, 2><<<grid_dim, block_dim, smem>>>(
+                    out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else if(shape.Hq == shape.Hkv * 4) {
             CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 4, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
@@ -403,6 +436,11 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
             CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 8, scalar_t>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
             hogwild_attention_gpu_kernel21<128, 128, 8><<<grid_dim, block_dim, smem>>>(
+                    out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
+        } else if(shape.Hq == shape.Hkv * 16) {
+            CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 16, scalar_t>,
+                                                      cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+            hogwild_attention_gpu_kernel21<128, 128, 16><<<grid_dim, block_dim, smem>>>(
                     out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
         } else {
             printf("Unsupported GQA\n");
