@@ -53,9 +53,10 @@ def parse_args():
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
     parser.add_argument("--dataset_path", type=str, default=None,
-                        help="optionally override math500 dataset - this should be a path for load_from_disk")
+                        help="optionally override math-500 dataset - this should be a path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
+    parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
     return parser.parse_args()
 
 
@@ -73,7 +74,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype='auto', device_map="auto", low_cpu_mem_usage=True
+        args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}

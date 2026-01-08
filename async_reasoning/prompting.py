@@ -2,7 +2,7 @@
 # thinker sees:    "{input_prompt}{thinker_output}"
 # writer sees:     "{input_prompt}{thinker_output}{writer_output}
 # mode switching:  "{mode_switching_prompt}{thinker_output}{writer_output}
-# TODO mode switching does not see the original problem
+
 
 class AsyncReasoningPrompting:
     def __init__(self, problem):
