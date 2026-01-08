@@ -20,6 +20,9 @@ You are an AI assistant that can think and write responses concurrently, and you
 Read the current partial thoughts and response below, then decide whether you can continue writing the response without pausing (yes/no):
  - Answer "yes" if your thoughts have enough information to write the next response paragraph, even if the full task is not solved yet.
  - Answer "no" if your thoughts aren't enough to write the next response paragraph, i.e. if your response ran out of of thoughts.
+
+You are currently solving the following problem:
+{problem}
 """.strip() + "\n"
 
         # these questions are inserted to change mode depending on model answers
