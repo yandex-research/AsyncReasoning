@@ -134,24 +134,27 @@ def evaluate_solution(sample: dict, response: str) -> bool:
         solution_table[f'House {i + 1}'] = {columns[j]: solution["rows"][i][j] for j in range(1, len(columns))}
         this_total_cells += len(columns) - 1
 
-    prediction_table = (extract_last_complete_json(response) or {}).get("solution", {})
-    this_correct_cells = 0  # number in the solution_table
-    for house in solution_table:
-        for column in solution_table[house]:
-            # if prediction_table[house][column] not exist then pass
-            if house in prediction_table and column in prediction_table[house]:
-                truth_cell = solution_table[house][column].lower().strip()
-                if prediction_table[house][column] is None or len(prediction_table[house][column]) == 0:
-                    continue
-                if type(prediction_table[house][column]) == list:
-                    predicted_cell = prediction_table[house][column][0].lower().strip()
-                elif type(prediction_table[house][column]) == str:
-                    predicted_cell = prediction_table[house][column].lower().strip()
-                else:
-                    raise ValueError(f"Unknown type: {type(prediction_table[house][column])}")
-                if truth_cell.lower().strip() == predicted_cell.lower().strip():
-                    this_correct_cells += 1
-    return this_correct_cells == this_total_cells
+    try:
+        prediction_table = (extract_last_complete_json(response) or {}).get("solution", {})
+        this_correct_cells = 0  # number in the solution_table
+        for house in solution_table:
+            for column in solution_table[house]:
+                # if prediction_table[house][column] not exist then pass
+                if house in prediction_table and column in prediction_table[house]:
+                    truth_cell = solution_table[house][column].lower().strip()
+                    if prediction_table[house][column] is None or len(prediction_table[house][column]) == 0:
+                        continue
+                    if type(prediction_table[house][column]) == list:
+                        predicted_cell = prediction_table[house][column][0].lower().strip()
+                    elif type(prediction_table[house][column]) == str:
+                        predicted_cell = prediction_table[house][column].lower().strip()
+                    else:
+                        raise ValueError(f"Unknown type: {type(prediction_table[house][column])}")
+                    if truth_cell.lower().strip() == predicted_cell.lower().strip():
+                        this_correct_cells += 1
+        return this_correct_cells == this_total_cells
+    except:
+        return False
 ###### end borrowed ZebraLogic evaluation protocol
 
 
