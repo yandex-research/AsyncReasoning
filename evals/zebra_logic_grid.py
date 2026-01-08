@@ -152,7 +152,6 @@ def evaluate_solution(sample: dict, response: str) -> bool:
                 if truth_cell.lower().strip() == predicted_cell.lower().strip():
                     this_correct_cells += 1
 
-    print(end=f"{prediction_table=}\n{solution_table=}\n{this_correct_cells=} {this_total_cells=}")
     return this_correct_cells == this_total_cells
 ###### end borrowed ZebraLogic evaluation protocol
 
@@ -266,10 +265,8 @@ def main():
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)
-        response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
-
-        is_equal = evaluate_solution(sample, response) if response else False
+        is_equal = evaluate_solution(sample, writer_output_str)
 
         chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5,
                                                return_audio=False)
@@ -281,7 +278,7 @@ def main():
             "metrics": metrics,
             "token_times": token_times,
             "eos_generated": eos_generated,
-            "response_answers": response,
+            "response_answers": extract_last_complete_json(writer_output_str),
             "correct_answer": make_correct_answer(sample),
             "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
