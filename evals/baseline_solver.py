@@ -30,6 +30,8 @@ class BaselineSolver:
             self.eos_token_ix = [self.eos_token_ix]
         if model.config.model_type == "gpt_oss":
             self.end_of_thinking_token_ix = [self.tokenizer.vocab[i] for i in ['<|channel|>', 'final', '<|message|>']]
+            assert thinker_enabled, "gpt-oss only works in thinking mode, set effort through $REASONING_EFFORT"
+            self.reasoning_effort = os.environ["REASONING_EFFORT"]
         else:
             assert model.config.model_type.startswith(
                 'qwen3'), "only tested with qwen3 and gpt-oss, remove this at your own risk"
@@ -89,7 +91,7 @@ class BaselineSolver:
         elif self.model.config.model_type == 'gpt_oss':
             text = self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": problem}],
-                tokenize=False, reasoning_effort=("high" if self.thinker_enabled else "low"),
+                tokenize=False, reasoning_effort=self.reasoning_effort,
                 add_generation_prompt=True)
         else:
             raise NotImplementedError(f"Unsupported chat template for model type {self.model.config.model_type}.")
