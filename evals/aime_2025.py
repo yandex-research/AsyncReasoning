@@ -17,7 +17,16 @@ from tts_evaluator import TTSEvaluator
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
 from utils.task_queue import TaskQueue
-from utils.random import fix_seed
+
+def fix_seed(seed: int):
+    import random
+    import numpy as np
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    transformers.set_seed(seed)
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
