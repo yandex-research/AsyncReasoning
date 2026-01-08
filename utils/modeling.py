@@ -18,7 +18,9 @@ def prepare_model_for_inference(
 ) -> transformers.PreTrainedModel:
     assert not kwargs, f"unrecognized {kwargs=}"
     if model.config.model_type == "qwen3":
-        pass  # no conversion - compile later
+        pass  # no conversion - compile later unless asked otherwise
+    if model.config.model_type == "gpt_oss":
+        pass  # no conversion - compile later unless asked otherwise
     elif model.config.model_type == "qwen3_moe" and fuse_qwen3_moe_experts:
         warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused; full-model compile is disabled")
         use_torch_compile = False
