@@ -7,6 +7,8 @@ from typing import Sequence
 
 import logging
 
+from utils.modeling import prepare_model_for_inference
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 
@@ -16,11 +18,9 @@ class BaselineSolver:
                  model: transformers.PreTrainedModel,
                  tokenizer: transformers.PreTrainedTokenizer,
                  thinker_enabled: bool = True,
-                 use_torch_compile: bool = bool(int(os.environ.get("USE_TORCH_COMPILE", 1))),
+                 **kwargs
                  ):
-        self.model = model
-        if use_torch_compile:
-            model = torch.compile(model)
+        self.model = prepare_model_for_inference(model, **kwargs)
         self.device = model.device
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
