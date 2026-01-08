@@ -28,7 +28,6 @@ def fix_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
     transformers.set_seed(seed)
 
-
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
 
@@ -67,9 +66,10 @@ def parse_args():
                         help="optionally override aime_2025 dataset - this should be a path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/aime_2025")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
-    parser.add_argument("--temperature", type=float, default=0.0, help="temperature for sampling")
+    parser.add_argument("--temperature", type=float, default=0.6, help="temperature for sampling")
     parser.add_argument("--top-p", type=float, default=0.95, help="top-p for sampling")
     parser.add_argument("--top-k", type=int, default=20, help="top-k for sampling")
+    parser.add_argument("--num-repeats", type=int, default=1, help="generate this many times")
     parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
     parser.add_argument("--seed", type=int, default=42, help="random seed")
     return parser.parse_args()
@@ -116,10 +116,10 @@ def main():
 
     solver = Solver(model, tokenizer, **solver_kwargs)
     if args.dataset_path is None:
-        dataset_aime = datasets.load_dataset('MathArena/aime_2025', split='train')
+        dataset_aime = datasets.load_dataset('MathArena/aime_2025', split='train').repeat(args.num_repeats)
     else:
         print(f"Overriding benchmark data with {args.dataset_path}")
-        dataset_aime = datasets.load_from_disk(args.dataset_path)
+        dataset_aime = datasets.load_from_disk(args.dataset_path).repeat(args.num_repeats)
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/aime_2025/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
