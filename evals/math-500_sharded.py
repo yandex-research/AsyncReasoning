@@ -62,6 +62,17 @@ def parse_args():
         default=None,
         help='Where to share live context. Use: --shard_to_target input | thinker | writer',
     )
+    parser.add_argument(
+        "--target_reminders",
+        nargs="+",
+        choices=["thinker", "writer"],
+        default=[],
+        help='Which of shard_to_target are reminders. Use: --target_reminders thinker | writer',
+    )
+
+    parser.add_argument(
+        "--shard_wait_step", action="store_true", default=False, help='Wait for \\n\\n before inserting shard?',
+    )
     return parser.parse_args()
 
 
@@ -98,6 +109,7 @@ def main():
     elif args.mode in ["baseline_think", "baseline_no_think"]:
         assert args.next_shard_every_steps is None, "async_input mode does not work in baselines."
         assert args.shard_to_target is None, "async_input mode does not work in baselines."
+        assert args.shard_wait_step is [], "async_input mode does not work in baselines."
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
             "thinker_enabled": (args.mode == "baseline_think"),
@@ -131,8 +143,10 @@ def main():
                 on_new_tokens_generated=async_input_hook_constructor(
                     solver,
                     args.shard_to_target,
+                    args.target_reminders,
                     args.next_shard_every_steps,
                     problem_shards[1],
+                    args.shard_wait_step,
                 )
             )
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
