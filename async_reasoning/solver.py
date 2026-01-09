@@ -9,7 +9,6 @@ import queue
 
 from async_reasoning.prompting import AsyncReasoningPrompting
 from async_reasoning.cache import State, AsyncReasoningCache
-# from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
 
 import logging
 
@@ -30,6 +29,7 @@ class AsyncReasoningSolver:
         **kwargs
     ):
         if use_fast_kernel:
+            from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
             model_surgery(model)
             self.Cache = AsyncReasoningCacheFastKernels
@@ -232,7 +232,7 @@ class LiveContextQueue:
         self.zero_counter()
     
     def zero_counter(self):
-        self.push_counter_per_target = {"writer": 0, "thinker": 0}
+        self.push_counter_per_target = {"writer": 0, "thinker": 0, "input": 0}
 
     def push_text(self, text: str, target: str = "thinker", defer_until_boundary: bool = False):
         tokens = self.tokenizer.encode(text, add_special_tokens=False)
