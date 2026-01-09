@@ -58,9 +58,9 @@ def parse_args():
     parser.add_argument(
         "--shard_to_target",
         nargs="+",
-        choices=["thinker", "writer"],
+        choices=["thinker", "writer", "input"],
         default=None,
-        help='Where to share live context. Use: --shard_to_target thinker | writer',
+        help='Where to share live context. Use: --shard_to_target input | thinker | writer',
     )
     return parser.parse_args()
 
@@ -82,7 +82,9 @@ def main():
 
     solver_kwargs = {}
     if args.mode in ["async_reasoning"]:
-        from async_reasoning.solver import AsyncReasoningSolver as Solver, LiveContextQueue
+        from async_reasoning.solver import AsyncReasoningSolver as Solver
+        from async_reasoning.async_input_hook import async_input_hook_constructor
+
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
         writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
         thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
@@ -96,7 +98,7 @@ def main():
     elif args.mode in ["baseline_think", "baseline_no_think"]:
         assert args.next_shard_every_steps is None, "async_input mode does not work in baselines."
         assert args.shard_to_target is None, "async_input mode does not work in baselines."
-        from evals.baseline_solver import BaselineSolver as Solver, LiveContextQueue
+        from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
             "thinker_enabled": (args.mode == "baseline_think"),
         })
@@ -122,19 +124,16 @@ def main():
         instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
-        def on_token(writer_tokens, thinker_tokens, token_times, eos, state):
-            if args.next_shard_every_steps <= 0:
-                return
-            for target in args.shard_to_target:
-                if solver.live_context_queue.push_counter_per_target[target] == 0 and len(thinker_tokens) >= args.next_shard_every_steps:
-                    solver.live_context_queue.push_text(f"\n\nADDITIONAL USER INPUT:{problem_shards[0]}\n\n", target=target, defer_until_boundary=True)
-
-
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(
                 problem, 
                 budget=args.budget,  
-                on_new_tokens_generated=on_token
+                on_new_tokens_generated=async_input_hook_constructor(
+                    solver,
+                    args.shard_to_target,
+                    args.next_shard_every_steps,
+                    problem_shards[1],
+                )
             )
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
