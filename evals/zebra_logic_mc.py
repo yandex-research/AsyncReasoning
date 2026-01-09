@@ -1,4 +1,4 @@
-import sys
+import sys;
 import warnings
 
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
@@ -6,6 +6,7 @@ sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
 import os
 import json
+import random
 import argparse
 
 import torch
@@ -20,8 +21,6 @@ from utils.task_queue import TaskQueue
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
-
-ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def parse_args():
@@ -52,13 +51,12 @@ def parse_args():
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
-    parser.add_argument("--num-samples", type=int, default=None, help="The size of subset used for evaluation")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
-    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/mmlu-pro")
+    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/zebra_logic")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used for option shuffling")
     parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed used for subset sampling")
     return parser.parse_args()
 
 
@@ -79,11 +77,11 @@ def main():
     model_name = args.model_name
     if 'qwen' not in model_name.lower():
         warnings.warn("We are yet to support forbidden token ids for models other than qwen")
-
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
+        model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map=args.device_map,
     )
 
     solver_kwargs = {}
@@ -108,15 +106,10 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_mmlu = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
-    if args.num_samples is not None:
-        print(f"Subsampling {args.num_samples} samples (seed={args.seed})")
-        dataset_mmlu = dataset_mmlu.shuffle(seed=args.seed).select(range(args.num_samples))
-    print(f"Evaluation dataset size = {len(dataset_mmlu)} samples")
+    dataset_zebra_logic = load_dataset("WildEval/ZebraLogic", "mc_mode", split="test")
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/mmlu-pro/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/zebra_logic/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
-
     evaluator = TTSEvaluator()
 
     def _solve_task_and_save(idx: int):
@@ -125,25 +118,22 @@ def main():
             return  # already solved by previous run and saved in snapshot
 
         nonlocal accuracy_numerator, accuracy_denominator
-
-        sample = dataset_mmlu[idx]
-    
-        num_options = len(sample["options"])
-        question = sample["question"].strip('\n')
-        answer = sample["answer"]
+        
+        sample = dataset_zebra_logic[idx]
 
         system_prompt = (
             "Please reason step by step, and put your final answer within \\boxed{} "
-            f"using ONLY the letter ({', '.join(ALPHABET[:num_options])}). Your final boxed answer must "
-            "contain exactly one letter and nothing else.\n\n"
+            f"using one of the following choices: {', '.join(sample['choices'])}. Your final boxed answer must "
+            "contain exactly one of the listed options and nothing else.\n"
         )
 
         problem = (
             system_prompt +
-            f"Question: {question}\n\n"
-            f"Choices:\n"
-            "\n".join([f"({ALPHABET[i]}) {option}" for i, option in enumerate(sample['options'])])
+            f"\n## Problem:\n{sample['puzzle']}" +
+            f"\n## Question:\n{sample['question'].strip()}"
         )
+
+        answer = sample["answer"]
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
             solver.solve(problem, budget=args.budget)

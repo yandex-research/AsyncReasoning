@@ -20,7 +20,8 @@ def prepare_model_for_inference(
     if model.config.model_type == "qwen3":
         pass  # no conversion - compile later
     elif model.config.model_type == "qwen3_moe" and fuse_qwen3_moe_experts:
-        warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused")
+        warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused; full-model compile is disabled")
+        use_torch_compile = False
         if quantize_qwen3_moe_experts:
             warnings.warn("Experts will be quantized to bnb 4-bit")
         transformers.utils.generic.OutputRecorder = getattr(transformers.utils.generic, "OutputRecorder", None)
@@ -30,6 +31,13 @@ def prepare_model_for_inference(
             try:
                 for i in range(len(model.model.layers)):
                     original_mlp = model.model.layers[i].mlp
+                    if quantize_qwen3_moe_experts:  # CPU MoE can optionally be initialized on CPU
+                        try:
+                            target_device = next(p.device for p in original_mlp.parameters() if p.device.type == "cuda")
+                        except StopIteration:
+                            target_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                        original_mlp = original_mlp.to(target_device)
+
                     torch.set_default_device(next(original_mlp.parameters()).device)
                     torch.set_default_dtype(next(original_mlp.parameters()).dtype)
                     fused_mlp = Qwen3MoeFusedSparseMoeBlock(model.config)
@@ -48,12 +56,14 @@ def prepare_model_for_inference(
             finally:
                 torch.set_default_device(default_device)
                 torch.set_default_dtype(default_dtype)
+            model.cuda()
     elif model.config.model_type == "qwen3_moe" and not fuse_qwen3_moe_experts:
         assert not quantize_qwen3_moe_experts, "quantizing experts is currently only implemented for fused moe"
         warnings.warn("Using vanilla qwen3_moe without expert fusion / quantization")
     else:
         raise NotImplementedError(f"Unknown model type {model.config.model_type} - you can add it here")
     if use_torch_compile:
+        warnings.warn("Compiling the whole model")
         model = torch.compile(model)
     return model
 

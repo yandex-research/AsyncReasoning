@@ -9,6 +9,7 @@ import queue
 
 from async_reasoning.prompting import AsyncReasoningPrompting
 from async_reasoning.cache import State, AsyncReasoningCache
+# from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
 
 import logging
 
@@ -26,19 +27,16 @@ class AsyncReasoningSolver:
         writer_forbidden_token_ix: Sequence[int] = [],
         end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True,
-        use_torch_compile: bool = None,
         **kwargs
     ):
         if use_fast_kernel:
-            from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
             model_surgery(model)
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
-        if use_torch_compile is None:
-            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
-        model = prepare_model_for_inference(model, use_torch_compile=use_torch_compile, **kwargs)
+            kwargs.setdefault("use_torch_compile", False)  # do not compile unless explicitly asked to
+        model = prepare_model_for_inference(model, **kwargs)
         if forbidden_token_ix:
             assert not (thinker_forbidden_token_ix or writer_forbidden_token_ix)
             thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
@@ -105,6 +103,7 @@ class AsyncReasoningSolver:
         token_times = []
         writer_output_tokens = self.tokenizer.encode(prompting.writer_output_prefix, **self.tokenizer_kwargs).flatten().tolist()
         thinker_output_tokens = self.tokenizer.encode(prompting.thinker_output_prefix, **self.tokenizer_kwargs).flatten().tolist()
+        input_tokens: List[int] = []
 
         writer_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
         thinker_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
@@ -161,6 +160,7 @@ class AsyncReasoningSolver:
                         cache,
                         writer_output_tokens,
                         thinker_output_tokens,
+                        input_tokens,
                     )
 
                 if on_new_tokens_generated is not None:
@@ -186,10 +186,16 @@ class AsyncReasoningSolver:
         cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'],
         writer_output_tokens: List[int],
         thinker_output_tokens: List[int],
+        input_tokens: List[int],
     ) -> List["QueuedInjection"]:
         remaining: List["QueuedInjection"] = []
         for inj in pending_injections:
-            token_stream = writer_output_tokens if inj.target == "writer" else thinker_output_tokens
+            if inj.target == "writer":
+                token_stream = writer_output_tokens
+            elif inj.target == "thinker":
+                token_stream = thinker_output_tokens
+            else:
+                token_stream = thinker_output_tokens  # defer based on thinker stream for input block
             if inj.defer_until_boundary and not self._is_boundary(token_stream):
                 remaining.append(inj)
                 continue
@@ -197,12 +203,13 @@ class AsyncReasoningSolver:
             cache.append_tokens(inj.target, tokens_tensor)
             if inj.target == "writer":
                 writer_output_tokens.extend([int(t) for t in inj.tokens])
-            else:
+            elif inj.target == "thinker":
                 thinker_output_tokens.extend([int(t) for t in inj.tokens])
+            else:
+                input_tokens.extend([int(t) for t in inj.tokens])
         return remaining
 
     def _is_boundary(self, tokens: Sequence[int]) -> bool:
-        # Treat paragraph breaks or sentence-ending punctuation as safe injection points.
         tail = self.tokenizer.decode(tokens[-12:]) if tokens else ""
         if tail.endswith("\n\n"):
             return True
@@ -238,8 +245,8 @@ class LiveContextQueue:
         target: str = "thinker",
         defer_until_boundary: bool = False,
     ):
-        if target not in ("writer", "thinker"):
-            raise ValueError(f"target must be 'writer' or 'thinker', got {target}")
+        if target not in ("writer", "thinker", "input"):
+            raise ValueError(f"target must be 'writer', 'thinker', or 'input', got {target}")
         self._queue.put(QueuedInjection(target, list(tokens), defer_until_boundary))
 
     def pop_all(self) -> List[QueuedInjection]:
