@@ -8,7 +8,7 @@ def async_input_hook_constructor(solver, shard_to_target, next_shard_every_steps
         target = "input"
         if target in shard_to_target and solver.live_context_queue.push_counter_per_target[target] == 0:
             solver.live_context_queue.push_text(
-                f"USER INPUT: {problem_shard}\n\n",
+                f"\n\nADDITIONAL USER INPUT: {problem_shard}\n\n",
                 target=target,
                 defer_until_boundary=True
             )
