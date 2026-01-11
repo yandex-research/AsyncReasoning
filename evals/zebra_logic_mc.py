@@ -1,23 +1,27 @@
-import sys
+import sys;
+import warnings
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
 import os
 import json
+import random
 import argparse
 
 import torch
 import transformers
 from tqdm import tqdm
-from datasets import load_dataset, load_from_disk
+from datasets import load_dataset
 
 from tts_evaluator import TTSEvaluator
-from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
+from utils.answer_processing import find_last_valid_expression
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
 from utils.task_queue import TaskQueue
 
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -49,31 +53,10 @@ def parse_args():
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
-    parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
-    parser.add_argument("--dataset_path", type=str, required=True,
-                        help="sharded math500 dataset path for load_from_disk")
-    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
+    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/zebra_logic")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used for option shuffling")
     parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
-    parser.add_argument("--next_shard_every_steps", type=int, help="Setting to set up shards appearance frequency. Exceptions are: 0 -- concat, -1 -- never supply the rest of the shards.")
-    parser.add_argument(
-        "--shard_to_target",
-        nargs="+",
-        choices=["thinker", "writer", "input"],
-        default=None,
-        help='Where to share live context. Use: --shard_to_target input | thinker | writer',
-    )
-    parser.add_argument(
-        "--target_reminders",
-        nargs="+",
-        choices=["thinker", "writer"],
-        default=[],
-        help='Which of shard_to_target are reminders. Use: --target_reminders thinker | writer',
-    )
-
-    parser.add_argument(
-        "--shard_wait_step", action="store_true", default=False, help='Wait for \\n\\n before inserting shard?',
-    )
     return parser.parse_args()
 
 
@@ -83,20 +66,27 @@ def main():
     logger = init_worker_logger()
     logger.info(f'The script was run in the following way:')
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
+
+    mode = args.mode
     use_fast_kernel = not args.use_slow_kernel
-    assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
+
+    print("CUDA_VISIBLE_DEVICES:", os.environ["CUDA_VISIBLE_DEVICES"])
+    print("HF_HOME:", os.environ["HF_HOME"])
+    print("OMP_NUM_THREADS:", os.environ["OMP_NUM_THREADS"])
+    
+    model_name = args.model_name
+    if 'qwen' not in model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
+        model_name, torch_dtype='auto', low_cpu_mem_usage=True, device_map=args.device_map,
     )
 
     solver_kwargs = {}
-    if args.mode in ["async_reasoning"]:
+    if mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
-        from async_reasoning.async_input_hook import async_input_hook_constructor
-
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
         writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
         thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
@@ -107,56 +97,50 @@ def main():
             "use_fast_kernel": use_fast_kernel,
             "end_of_think_token_ix": end_of_think_token_ix,
         })
-    elif args.mode in ["baseline_think", "baseline_no_think"]:
-        assert args.next_shard_every_steps is None, "async_input mode does not work in baselines."
-        assert args.shard_to_target is None, "async_input mode does not work in baselines."
-        assert args.shard_wait_step is [], "async_input mode does not work in baselines."
+    elif mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
-            "thinker_enabled": (args.mode == "baseline_think"),
+            "thinker_enabled": (mode == "baseline_think"),
         })
     else:
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_from_disk(args.dataset_path)
+    dataset_zebra_logic = load_dataset("WildEval/ZebraLogic", "mc_mode", split="test")
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/zebra_logic/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
     def _solve_task_and_save(idx: int):
         save_path = f"{exp_dir_path}/sample_{idx}.json"
-        if os.path.exists(save_path):  
+        if os.path.exists(save_path):
             return  # already solved by previous run and saved in snapshot
 
         nonlocal accuracy_numerator, accuracy_denominator
-        problem_shards = dataset_math[idx]['problem_shards']
-        answer = str(dataset_math[idx]['answer'])
-        assert len(problem_shards) == 2, f"Unexpected number of shards on id: {idx}, {len(problem_shards)}"
-        instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
-        problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
+        
+        sample = dataset_zebra_logic[idx]
+
+        system_prompt = (
+            "Please reason step by step, and put your final answer within \\boxed{} "
+            f"using one of the following choices: {', '.join(sample['choices'])}. Your final boxed answer must "
+            "contain exactly one of the listed options and nothing else.\n"
+        )
+
+        problem = (
+            system_prompt +
+            f"\n## Problem:\n{sample['puzzle']}" +
+            f"\n## Question:\n{sample['question'].strip()}"
+        )
+
+        answer = sample["answer"]
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
-            solver.solve(
-                problem, 
-                budget=args.budget,  
-                on_new_tokens_generated=async_input_hook_constructor(
-                    solver,
-                    args.shard_to_target,
-                    args.target_reminders,
-                    args.next_shard_every_steps,
-                    problem_shards[1],
-                    args.shard_wait_step,
-                )
-            )
+            solver.solve(problem, budget=args.budget)
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
 
-        if args.use_local_judge:
-            is_equal = check_equality_local_model(model, tokenizer, response, answer)
-        else:
-            is_equal = check_equality_judge(response, answer)
+        is_equal = response.strip() == answer.strip() if response else False
 
         chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
         metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
@@ -194,6 +178,7 @@ def main():
     else:
         raise NotImplementedError("Please specify either --queue or both --start and --end")
     logger.info(f'Process {rank} has finished.')
+
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,7 @@
 import sys
+import warnings
+import datasets
+
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 sys.path.insert(0, __file__.rsplit("/", 2)[0] + "/utils")
 
@@ -9,7 +12,6 @@ import argparse
 import torch
 import transformers
 from tqdm import tqdm
-from datasets import load_dataset, load_from_disk
 
 from tts_evaluator import TTSEvaluator
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
@@ -50,30 +52,11 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
-    parser.add_argument("--dataset_path", type=str, required=True,
-                        help="sharded math500 dataset path for load_from_disk")
-    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
+    parser.add_argument("--dataset_path", type=str, default=None,
+                        help="optionally override aime_2025 dataset - this should be a path for load_from_disk")
+    parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/aime_2025")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
     parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
-    parser.add_argument("--next_shard_every_steps", type=int, help="Setting to set up shards appearance frequency. Exceptions are: 0 -- concat, -1 -- never supply the rest of the shards.")
-    parser.add_argument(
-        "--shard_to_target",
-        nargs="+",
-        choices=["thinker", "writer", "input"],
-        default=None,
-        help='Where to share live context. Use: --shard_to_target input | thinker | writer',
-    )
-    parser.add_argument(
-        "--target_reminders",
-        nargs="+",
-        choices=["thinker", "writer"],
-        default=[],
-        help='Which of shard_to_target are reminders. Use: --target_reminders thinker | writer',
-    )
-
-    parser.add_argument(
-        "--shard_wait_step", action="store_true", default=False, help='Wait for \\n\\n before inserting shard?',
-    )
     return parser.parse_args()
 
 
@@ -85,6 +68,8 @@ def main():
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
+    if 'qwen' not in args.model_name.lower():
+        warnings.warn("We are yet to support forbidden token ids for models other than qwen")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
@@ -95,8 +80,6 @@ def main():
     solver_kwargs = {}
     if args.mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
-        from async_reasoning.async_input_hook import async_input_hook_constructor
-
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
         writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
         thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
@@ -108,9 +91,6 @@ def main():
             "end_of_think_token_ix": end_of_think_token_ix,
         })
     elif args.mode in ["baseline_think", "baseline_no_think"]:
-        assert args.next_shard_every_steps is None, "async_input mode does not work in baselines."
-        assert args.shard_to_target is None, "async_input mode does not work in baselines."
-        assert args.shard_wait_step is [], "async_input mode does not work in baselines."
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
             "thinker_enabled": (args.mode == "baseline_think"),
@@ -119,9 +99,13 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_from_disk(args.dataset_path)
+    if args.dataset_path is None:
+        dataset_aime = datasets.load_dataset('MathArena/aime_2025', split='train')
+    else:
+        print(f"Overriding benchmark data with {args.dataset_path}")
+        dataset_aime = datasets.load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/aime_2025/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
@@ -131,25 +115,13 @@ def main():
             return  # already solved by previous run and saved in snapshot
 
         nonlocal accuracy_numerator, accuracy_denominator
-        problem_shards = dataset_math[idx]['problem_shards']
-        answer = str(dataset_math[idx]['answer'])
-        assert len(problem_shards) == 2, f"Unexpected number of shards on id: {idx}, {len(problem_shards)}"
-        instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
+        instruction = str(dataset_aime[idx]['problem'])
+        answer = str(dataset_aime[idx]['answer'])
+
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
-            solver.solve(
-                problem, 
-                budget=args.budget,  
-                on_new_tokens_generated=async_input_hook_constructor(
-                    solver,
-                    args.shard_to_target,
-                    args.target_reminders,
-                    args.next_shard_every_steps,
-                    problem_shards[1],
-                    args.shard_wait_step,
-                )
-            )
+            solver.solve(problem, budget=args.budget)
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
 
