@@ -26,7 +26,6 @@ class AsyncReasoningSolver:
         writer_forbidden_token_ix: Sequence[int] = [],
         end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True,
-        use_torch_compile: bool = None,
         **kwargs
     ):
         if use_fast_kernel:
@@ -36,9 +35,8 @@ class AsyncReasoningSolver:
             self.Cache = AsyncReasoningCacheFastKernels
         else:
             self.Cache = AsyncReasoningCache
-        if use_torch_compile is None:
-            use_torch_compile = bool(int(os.environ.get("USE_TORCH_COMPILE", use_fast_kernel)))
-        model = prepare_model_for_inference(model, use_torch_compile=use_torch_compile, **kwargs)
+            kwargs.setdefault("use_torch_compile", False)  # do not compile unless explicitly asked to
+        model = prepare_model_for_inference(model, **kwargs)
         if forbidden_token_ix:
             assert not (thinker_forbidden_token_ix or writer_forbidden_token_ix)
             thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
