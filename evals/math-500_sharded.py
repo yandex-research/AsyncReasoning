@@ -132,7 +132,7 @@ def main():
         nonlocal accuracy_numerator, accuracy_denominator
         problem_shards = dataset_math[idx]['problem_shards']
         answer = str(dataset_math[idx]['answer'])
-        assert len(problem_shards) == 2, f"Unexpected number of shards on id: {idx}, {len(problem_shards)}"
+        assert len(problem_shards) >= 2, f"Unexpected number of shards on id: {idx}, {len(problem_shards)}"
         instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
@@ -145,7 +145,7 @@ def main():
                     args.shard_to_target,
                     args.target_reminders,
                     args.next_shard_every_steps,
-                    problem_shards[1],
+                    problem_shards[1:],
                     args.shard_wait_step,
                 )
             )
