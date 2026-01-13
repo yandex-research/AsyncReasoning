@@ -130,7 +130,7 @@ def main():
     dataset = [el for el in dataset if el["task"] == "math"]
 
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/llms_get_lost_{args.next_shard_every_steps}_steps/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
