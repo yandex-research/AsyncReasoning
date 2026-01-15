@@ -142,7 +142,8 @@ def main():
         nonlocal accuracy_numerator, accuracy_denominator
         problem_shards = [el["shard"] for el in dataset[idx]['shards']]
         answer = str(dataset[idx]['answer'])
-        instruction = "".join([dataset[idx]["question"]] + problem_shards) if args.next_shard_every_steps == 0 else dataset[idx]["question"]
+        # instruction = "".join([dataset[idx]["question"]] + problem_shards) if args.next_shard_every_steps == 0 else dataset[idx]["question"]
+        instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
         writer_output_str, thinker_output_str, token_times, eos_generated = \
@@ -154,7 +155,7 @@ def main():
                     args.shard_to_target,
                     args.target_reminders,
                     args.next_shard_every_steps,
-                    problem_shards,
+                    problem_shards[1:],
                     args.shard_wait_step,
                 )
             )
