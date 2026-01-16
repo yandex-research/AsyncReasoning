@@ -64,7 +64,7 @@ def _expand_decimal_point(m):
 def _expand_dollars(m):
   match = m.group(1)
   parts = match.split('.')
-  if len(parts) > 2:
+  if len(match) >= 4300 or len(parts) > 2:
     return match + ' dollars'  # Unexpected format
   dollars = int(parts[0]) if parts[0] else 0
   cents = int(parts[1]) if len(parts) > 1 and parts[1] else 0
