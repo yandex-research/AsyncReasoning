@@ -4,12 +4,11 @@ import torch
 import warnings
 import transformers
 from IPython.display import display, Markdown, clear_output
-from typing import Sequence, Union, Callable, Optional, List, Tuple
-import queue
+from typing import Sequence, Union, Callable, Optional
 
 from async_reasoning.prompting import AsyncReasoningPrompting
+from async_reasoning.plan_guidance import PlanGuidanceConfig, select_plan
 from async_reasoning.cache import State, AsyncReasoningCache
-# from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
 
 import logging
 
@@ -27,9 +26,13 @@ class AsyncReasoningSolver:
         writer_forbidden_token_ix: Sequence[int] = [],
         end_of_think_token_ix: Sequence[int] = [],
         use_fast_kernel: bool = True,
+        plan_first: bool = False,
+        plan_guidance: Optional[PlanGuidanceConfig] = None,
+        system_prompt: Optional[str] = None,
         **kwargs
     ):
         if use_fast_kernel:
+            from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
             from hogwild.attention import model_surgery
             model_surgery(model)
             self.Cache = AsyncReasoningCacheFastKernels
@@ -49,6 +52,9 @@ class AsyncReasoningSolver:
         self.thinker_forbidden_token_ix, self.writer_forbidden_token_ix = thinker_forbidden_token_ix, writer_forbidden_token_ix
         self.end_of_think_token_ix = end_of_think_token_ix
         self.use_fast_kernel = use_fast_kernel
+        self.plan_first = plan_first
+        self.plan_guidance = plan_guidance
+        self.system_prompt = system_prompt
 
     @torch.inference_mode()
     def check_if_should_continue_writing(self,
@@ -95,21 +101,50 @@ class AsyncReasoningSolver:
                 None,
             ]
         ] = None,
-        live_context_queue: Optional["LiveContextQueue"] = None,
+        plan_guidance: Optional[PlanGuidanceConfig] = None,
     ):
+        active_plan_guidance = plan_guidance if plan_guidance is not None else self.plan_guidance
+        plan_first = self.plan_first or active_plan_guidance is not None
+        plan_text = None
+        plan_context = None
+        plan_output_prefix = None
+        plan_output_suffix = None
+        if active_plan_guidance is not None:
+            plan_text, _meta = select_plan(
+                self.model,
+                self.tokenizer,
+                problem,
+                active_plan_guidance,
+                self.tokenizer_kwargs,
+            )
+            plan_first = True
+            if plan_text:
+                plan_context = (
+                    "Accepted plan (already shown to the user):\n"
+                    f"{plan_text}\n"
+                    "Follow it. Do not restate the plan; continue directly with the solution."
+                )
+            plan_output_prefix = active_plan_guidance.plan_output_prefix
+            plan_output_suffix = active_plan_guidance.plan_output_suffix
 
-        prompting = AsyncReasoningPrompting(problem)
+        prompting = AsyncReasoningPrompting(
+            problem,
+            system_prompt=self.system_prompt,
+            plan_first=plan_first,
+            plan_text=plan_text,
+            plan_output_prefix=plan_output_prefix or "Plan:\n",
+            plan_output_suffix=plan_output_suffix or "\n\nAnswer:\n",
+            plan_context=plan_context,
+        )
 
         token_times = []
         writer_output_tokens = self.tokenizer.encode(prompting.writer_output_prefix, **self.tokenizer_kwargs).flatten().tolist()
         thinker_output_tokens = self.tokenizer.encode(prompting.thinker_output_prefix, **self.tokenizer_kwargs).flatten().tolist()
-        input_tokens: List[int] = []
 
         writer_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
         thinker_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
-        pending_injections: List["QueuedInjection"] = []
         with torch.inference_mode():
             starting_time = time.perf_counter()
             for step in range(budget):
@@ -151,17 +186,6 @@ class AsyncReasoningSolver:
                 if writer_output_tokens[-1] == self.tokenizer.eos_token_id:
                     eos_generated = True
 
-                if live_context_queue is not None:
-                    pending_injections.extend(live_context_queue.pop_all())
-                    if pending_injections:
-                        pending_injections = self._apply_pending_injections(
-                            pending_injections,
-                            cache,
-                            writer_output_tokens,
-                            thinker_output_tokens,
-                            input_tokens,
-                        )
-
                 if on_new_tokens_generated is not None:
                     on_new_tokens_generated(
                         writer_output_tokens,
@@ -178,73 +202,3 @@ class AsyncReasoningSolver:
         writer_output_str, thinker_output_str = self.tokenizer.decode(writer_output_tokens), self.tokenizer.decode(thinker_output_tokens)
 
         return writer_output_str, thinker_output_str, token_times, eos_generated
-
-    def _apply_pending_injections(
-        self,
-        pending_injections: List["QueuedInjection"],
-        cache: Union['AsyncReasoningCache', 'AsyncReasoningCacheFastKernels'],
-        writer_output_tokens: List[int],
-        thinker_output_tokens: List[int],
-        input_tokens: List[int],
-    ) -> List["QueuedInjection"]:
-        remaining: List["QueuedInjection"] = []
-        for inj in pending_injections:
-            if inj.target == "writer":
-                token_stream = writer_output_tokens
-            elif inj.target == "thinker":
-                token_stream = thinker_output_tokens
-            else:
-                token_stream = thinker_output_tokens  # defer based on thinker stream for input block
-            if inj.defer_until_boundary and not self._is_boundary(token_stream):
-                remaining.append(inj)
-                continue
-            tokens_tensor = torch.tensor([inj.tokens], device=self.device)
-            cache.append_tokens(inj.target, tokens_tensor)
-            if inj.target == "writer":
-                writer_output_tokens.extend([int(t) for t in inj.tokens])
-            elif inj.target == "thinker":
-                thinker_output_tokens.extend([int(t) for t in inj.tokens])
-            else:
-                input_tokens.extend([int(t) for t in inj.tokens])
-        return remaining
-
-    def _is_boundary(self, tokens: Sequence[int]) -> bool:
-        tail = self.tokenizer.decode(tokens[-12:]) if tokens else ""
-        if tail.endswith("\n\n"):
-            return True
-        return any(tail.rstrip().endswith(mark) for mark in (".", "!", "?", "…"))
-
-
-class QueuedInjection:
-    def __init__(self, target: str, tokens: List[int], defer_until_boundary: bool):
-        self.target = target
-        self.tokens = tokens
-        self.defer_until_boundary = defer_until_boundary
-
-
-class LiveContextQueue:
-    """Thread-safe queue for feeding extra context tokens/text mid-generation."""
-    def __init__(self, tokenizer: transformers.PreTrainedTokenizer, device: torch.device):
-        self._queue: queue.Queue[QueuedInjection] = queue.Queue()
-        self.tokenizer = tokenizer
-        self.device = device
-
-    def push_text(self, text: str, target: str = "thinker", defer_until_boundary: bool = False):
-        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        self.push_tokens(tokens, target=target, defer_until_boundary=defer_until_boundary)
-
-    def push_tokens(
-        self,
-        tokens: Sequence[int],
-        target: str = "thinker",
-        defer_until_boundary: bool = False,
-    ):
-        if target not in ("writer", "thinker", "input"):
-            raise ValueError(f"target must be 'writer', 'thinker', or 'input', got {target}")
-        self._queue.put(QueuedInjection(target, list(tokens), defer_until_boundary))
-
-    def pop_all(self) -> List[QueuedInjection]:
-        items: List[QueuedInjection] = []
-        while not self._queue.empty():
-            items.append(self._queue.get())
-        return items
