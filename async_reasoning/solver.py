@@ -45,6 +45,8 @@ class AsyncReasoningSolver:
             thinker_forbidden_token_ix = writer_forbidden_token_ix = forbidden_token_ix
             warnings.warn("forbidden_token_ix is deprecated, use separate thinker_/writer_forbidden_token_ix")
 
+        if plan_guidance is None:
+            plan_guidance = PlanGuidanceConfig(strategy="best_of_n", num_plans=3, temperature=1.2)
         self.model = model
         self.device = model.device
         self.tokenizer = tokenizer
@@ -101,9 +103,9 @@ class AsyncReasoningSolver:
                 None,
             ]
         ] = None,
-        plan_guidance: Optional[PlanGuidanceConfig] = None,
     ):
-        active_plan_guidance = plan_guidance if plan_guidance is not None else self.plan_guidance
+        active_plan_guidance = self.plan_guidance
+        assert active_plan_guidance is not None
         plan_first = self.plan_first or active_plan_guidance is not None
         plan_text = None
         plan_context = None
