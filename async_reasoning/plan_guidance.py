@@ -5,6 +5,10 @@ from typing import Callable, Optional, Sequence, Tuple, Union
 import random
 import re
 
+import transformers
+
+from inference_lib.python.hogwild.attention import HogwildCache
+
 PlanRater = Callable[[str, str], Union[float, bool]]
 
 DEFAULT_PLAN_SYSTEM_PROMPT = (
@@ -179,6 +183,10 @@ def _generate_plan(
     gen_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": do_sample}
     if do_sample:
         gen_kwargs["temperature"] = temperature
+
+    ### THIS IS FOR USE_FAST_KERNELS ONLY
+    gen_kwargs["past_key_values"] = HogwildCache(cache_structure=[[transformers.DynamicCache()]], model=model)
+    ### /
     outputs = model.generate(**inputs, **gen_kwargs)
     raw_text = tokenizer.decode(outputs[0, prompt_len:], skip_special_tokens=True)
     return _normalize_plan_text(raw_text)
