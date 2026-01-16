@@ -112,6 +112,7 @@ class AsyncReasoningSolver:
         plan_output_prefix = None
         plan_output_suffix = None
         if active_plan_guidance is not None:
+            print(end="PLANNING...\n")
             plan_text, _meta = select_plan(
                 self.model,
                 self.tokenizer,
@@ -119,6 +120,7 @@ class AsyncReasoningSolver:
                 active_plan_guidance,
                 self.tokenizer_kwargs,
             )
+            print(end=f"PLAN: {plan_text}\n" + "=" * 80 + "\n")
             plan_first = True
             if plan_text:
                 plan_context = (
