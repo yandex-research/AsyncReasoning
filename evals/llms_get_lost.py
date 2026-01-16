@@ -16,6 +16,9 @@ from utils.answer_processing import find_last_valid_expression, check_equality_j
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
 from utils.task_queue import TaskQueue
 
+from huggingface_hub import hf_hub_download
+import json
+
 if "NV_YT_OPERATION_ID" in os.environ:
     import nirvana_dl
 
@@ -50,11 +53,8 @@ def parse_args():
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
     parser.add_argument("--use-local-judge", action="store_true", default=False, help="Use the same model as a judge for result.")
-    parser.add_argument("--dataset_path", type=str, required=True,
-                        help="sharded math500 dataset path for load_from_disk")
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
-    parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
     parser.add_argument("--next_shard_every_steps", type=int, help="Setting to set up shards appearance frequency. Exceptions are: 0 -- concat, -1 -- never supply the rest of the shards.")
     parser.add_argument(
         "--shard_to_target",
@@ -89,7 +89,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
+        args.model_name, torch_dtype='auto', device_map=device, low_cpu_mem_usage=True
     )
 
     solver_kwargs = {}
@@ -119,9 +119,18 @@ def main():
         raise ValueError("unsupported mode")
 
     solver = Solver(model, tokenizer, **solver_kwargs)
-    dataset_math = load_from_disk(args.dataset_path)
+
+    dataset_path = hf_hub_download(
+        repo_id="microsoft/lost_in_conversation",
+        filename="lost_in_conversation.json",
+        repo_type="dataset",
+    )
+    with open(dataset_path, "r", encoding="utf-8") as f:
+        dataset = json.load(f)
+    dataset = [el for el in dataset if el["task"] == "math"]
+
     accuracy_numerator = accuracy_denominator = 0
-    exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
+    exp_dir_path = f"{args.path_to_results}/llms_get_lost_{args.next_shard_every_steps}_steps/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     evaluator = TTSEvaluator()
 
@@ -131,9 +140,9 @@ def main():
             return  # already solved by previous run and saved in snapshot
 
         nonlocal accuracy_numerator, accuracy_denominator
-        problem_shards = dataset_math[idx]['problem_shards']
-        answer = str(dataset_math[idx]['answer'])
-        assert len(problem_shards) >= 2, f"Unexpected number of shards on id: {idx}, {len(problem_shards)}"
+        problem_shards = [el["shard"] for el in dataset[idx]['shards']]
+        answer = str(dataset[idx]['answer'])
+        # instruction = "".join([dataset[idx]["question"]] + problem_shards) if args.next_shard_every_steps == 0 else dataset[idx]["question"]
         instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
