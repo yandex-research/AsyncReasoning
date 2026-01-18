@@ -86,9 +86,7 @@ def main():
     logger.info(f"python {__file__} \\\n" + "\n".join(f"\t\t--{k} {v} \\" for k, v in vars(args).items()))
     use_fast_kernel = not args.use_slow_kernel
     assert (not args.use_local_judge) or (not use_fast_kernel), "You cannot use local model with kernel as a judge"
-    for reminder in args.target_reminders:
-        assert reminder not in args.shard_to_target, f"{reminder} is both in shard_to_target and target_reminders, choose one "
-    
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
