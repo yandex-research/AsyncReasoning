@@ -1,13 +1,17 @@
-Kernel support for [Hogwild! Inference](https://arxiv.org/abs/2504.06261)
+# AsyncReasoning inference lib
+
+Kernel support for [Asynchronous Reasoning: Training-Free Interactive Thinking LLMs](https://arxiv.org/abs/2512.10931)
 
 ````bibtex
-@misc{rodionov2025hogwildinferenceparallelllm,
-      title={Hogwild! Inference: Parallel LLM Generation via Concurrent Attention}, 
-      author={Gleb Rodionov and Roman Garipov and Alina Shutova and George Yakushev and Erik Schultheis and Vage Egiazarian and Anton Sinitsin and Denis Kuznedelev and Dan Alistarh},
+@misc{yakushev2025asynchronousreasoningtrainingfreeinteractive,
+      title={Asynchronous Reasoning: Training-Free Interactive Thinking LLMs}, 
+      author={George Yakushev and Nataliia Babina and Masoud Vahid Dastgerdi and Vyacheslav Zhdanovskiy and Alina Shutova and Denis Kuznedelev},
       year={2025},
-      eprint={2504.06261},
+      eprint={2512.10931},
       archivePrefix={arXiv},
       primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2504.06261}, 
+      url={https://arxiv.org/abs/2512.10931}, 
 }
 ````
+
+Based on kernels from [Hogwild! Inference: Parallel LLM Generation via Concurrent Attention](https://arxiv.org/abs/2504.06261).

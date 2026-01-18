@@ -29,7 +29,7 @@ class AsyncReasoningSolver:
     ):
         if use_fast_kernel:
             from async_reasoning.cache_fast_kernels import AsyncReasoningCacheFastKernels
-            from hogwild.attention import model_surgery
+            from async_reasoning_inference.attention import model_surgery
             model_surgery(model)
             self.Cache = AsyncReasoningCacheFastKernels
         else:

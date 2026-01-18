@@ -82,7 +82,7 @@ def run_single_attack(model, tokenizer, problem_prompt: str, max_steps=1024):
         thinker_output_tokens.extend(newline_tokens)
 
         with torch.inference_mode():
-            gen_loop = tqdm(range(max_steps), desc="Hogwild Generation", leave=False)
+            gen_loop = tqdm(range(max_steps), desc="AsyncReasoning Generation", leave=False)
             for step in gen_loop:
                 if cache.state == State.thinker_only:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=model.device)}

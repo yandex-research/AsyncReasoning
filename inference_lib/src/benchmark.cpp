@@ -138,7 +138,7 @@ void run_benchmarks(const Shape& shape, int prefix_length, bool profile, const s
         try {
             // if we're not running with the profiler, do warm-up
             if (!profile) {
-                auto err = hogwild_attention_gpu_dispatch(
+                auto err = async_reasoning_attention_gpu_dispatch(
                         d_output, 1.f / sqrtf(128), d_locations, d_queries, d_frag_lengths,
                         (const scalar_t **) d_keys_ptr, (const scalar_t **) d_values_ptr, test.Shape,
                         kernel_id);
@@ -153,7 +153,7 @@ void run_benchmarks(const Shape& shape, int prefix_length, bool profile, const s
                 CUDA_CHECK_THROW(cudaMemset(thrash, 0, 1024 * 1024 * 1024));   // clear L2 cache
                 CUDA_CHECK_THROW(cudaDeviceSynchronize());
                 auto start_kernel = std::chrono::steady_clock::now();
-                auto err = hogwild_attention_gpu_dispatch(
+                auto err = async_reasoning_attention_gpu_dispatch(
                         d_output, 1.f / sqrtf(128), d_locations, d_queries, d_frag_lengths,
                         (const scalar_t **) d_keys_ptr, (const scalar_t **) d_values_ptr, test.Shape,
                         kernel_id);

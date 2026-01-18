@@ -1,12 +1,12 @@
 #include "common.h"
 
 template<class scalar_t>
-void hogwild_attention_cpu(float* out, float* att_out, float* qk_out, float scale,
-                           const int* locations, const scalar_t* queries,
-                           const int* fragment_lengths,
-                           const scalar_t** key_fragments,
-                           const scalar_t** value_fragments,
-                           Shape shape) {
+void async_reasoning_attention_cpu(float* out, float* att_out, float* qk_out, float scale,
+                                   const int* locations, const scalar_t* queries,
+                                   const int* fragment_lengths,
+                                   const scalar_t** key_fragments,
+                                   const scalar_t** value_fragments,
+                                   Shape shape) {
     // Input:   keys: [Hkv, fragment_lengths[i], E] for i in [F]
     //          values: [Hkv, fragment_lengths[i], Ev] for i in [F]
     //          fragment_lengths: [F]

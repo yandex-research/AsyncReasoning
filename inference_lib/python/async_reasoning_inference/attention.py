@@ -16,19 +16,19 @@ from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
 #########
 try:
     from importlib.metadata import distribution
-    torch.ops.load_library(str(distribution("hogwild").locate_file('')) + "/hogwild/hogatt.abi3.so")
+    torch.ops.load_library(str(distribution("async_reasoning_inference").locate_file('')) + "/async_reasoning_inference/asyncreasoningatt.abi3.so")
 except OSError:
-    warnings.warn("Could not load hogatt.abi3.so file. Defaulting to slower eager realization.")
+    warnings.warn("Could not load asyncreasoning_att.abi3.so file. Defaulting to slower eager realization.")
 
 
-def hogwild_fused(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
+def async_reasoning_fused(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
                   scale: float, fragment_lengths, cosines: torch.Tensor, sines: torch.Tensor, *, rotated_queries, out):
     """Custom rope+attention kernel"""
-    torch.ops.libhogatt.hogwild_fused(out, rotated_queries, scale, locations, queries.contiguous(), fragment_lengths, keys, values, cosines, sines)
+    torch.ops.libasyncreasoningatt.async_reasoning_fused(out, rotated_queries, scale, locations, queries.contiguous(), fragment_lengths, keys, values, cosines, sines)
     return out
 
 
-def hogwild_sdpa(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
+def async_reasoning_sdpa(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
                  scale: float, fragment_lengths=None, out=None) -> torch.Tensor:
     if out is None:
         out = torch.empty((queries.size(1), queries.size(2), queries.size(3), values[0].size(3)), dtype=queries.dtype, device=queries.device)
@@ -36,14 +36,14 @@ def hogwild_sdpa(queries: torch.Tensor, locations: torch.Tensor, keys: list[torc
         fragment_lengths = torch.tensor([k.size(2) for k in keys], dtype=torch.int32, device=queries.device)
     keys = [k.contiguous() for k in keys]
     values = [v.contiguous() for v in values]
-    torch.ops.libhogatt.hogwild_sdpa(out, scale, locations, queries.contiguous(), fragment_lengths, keys, values)
+    torch.ops.libasyncreasoningatt.async_reasoning_sdpa(out, scale, locations, queries.contiguous(), fragment_lengths, keys, values)
     return out
 
 
-def hogwild_sdpa_pt(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
+def async_reasoning_sdpa_pt(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
                     scale: float, return_intermediate_results: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Pure pytorch implementation of Howild! attention. Useful for testing and debugging.
+    Pure pytorch implementation of AsyncReasoning attention. Useful for testing and debugging.
     """
     qk = []
     vals = []
@@ -72,10 +72,10 @@ def hogwild_sdpa_pt(queries: torch.Tensor, locations: torch.Tensor, keys: list[t
         return result.to(queries.dtype)
 
 
-def hogwild_rope(queries: torch.Tensor, cosines: torch.Tensor, sines: torch.Tensor, out=None):
+def async_reasoning_rope(queries: torch.Tensor, cosines: torch.Tensor, sines: torch.Tensor, out=None):
     if out is None:
         out = torch.empty((cosines.size(0), queries.size(0), queries.size(1), queries.size(2), queries.size(3)), dtype=queries.dtype, device=queries.device)
-    torch.ops.libhogatt.hogwild_rope(out, queries, cosines, sines)
+    torch.ops.libasyncreasoningatt.async_reasoning_rope(out, queries, cosines, sines)
     return out
 
 
@@ -114,7 +114,7 @@ class CacheStructure:
     loc: torch.Tensor  # relative location
 
 
-class HogwildCache(Cache):
+class AsyncReasoningCache(Cache):
     def __init__(
             self,
             cache_structure: List[List[Cache]],
@@ -275,7 +275,7 @@ def merge_caches(target: Cache, source: Cache, model):
 
 
 class AttentionModuleForQwen2(nn.Module):
-    """Modified attention layer adapted to HogwildCache.
+    """Modified attention layer adapted to AsyncReasoningCache.
     """
 
     def __init__(self, config: Qwen2Config, layer_idx: int):
@@ -306,7 +306,7 @@ class AttentionModuleForQwen2(nn.Module):
             hidden_states: torch.Tensor,
             position_embeddings: Tuple[torch.Tensor, torch.Tensor],
             attention_mask: Optional[torch.Tensor],
-            past_key_value: Optional[HogwildCache] = None,
+            past_key_value: Optional[AsyncReasoningCache] = None,
             cache_position: torch.LongTensor = None,
             position_ids: Optional[torch.Tensor] = None,
             **kwargs,
@@ -334,10 +334,10 @@ class AttentionModuleForQwen2(nn.Module):
         if self.config._attn_implementation == "eager":
             queries = torch.tile(torch.unsqueeze(query_states, 0), (cache.cos.size(0), 1, 1, 1, 1))
             queries = apply_rotary_pos_emb(queries, cache.cos, cache.sin, unsqueeze_dim=2)
-            attn_output = hogwild_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
+            attn_output = async_reasoning_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
         else:
             rq = past_key_value.get_queries_buffer(query_states, layer_idx=self.layer_idx)
-            attn_output = hogwild_fused(
+            attn_output = async_reasoning_fused(
                 query_states,
                 cache.loc,
                 cache.keys,
@@ -356,7 +356,7 @@ class AttentionModuleForQwen2(nn.Module):
 
 
 class AttentionModuleForQwen3(nn.Module):
-    """Modified attention layer adapted to HogwildCache.
+    """Modified attention layer adapted to AsyncReasoningCache.
     """
 
     def __init__(self, config: Qwen3Config, layer_idx: int):
@@ -390,7 +390,7 @@ class AttentionModuleForQwen3(nn.Module):
             hidden_states: torch.Tensor,
             position_embeddings: Tuple[torch.Tensor, torch.Tensor],
             attention_mask: Optional[torch.Tensor],
-            past_key_value: Optional[HogwildCache] = None,
+            past_key_value: Optional[AsyncReasoningCache] = None,
             cache_position: torch.LongTensor = None,
             position_ids: Optional[torch.Tensor] = None,
             **kwargs,
@@ -418,10 +418,10 @@ class AttentionModuleForQwen3(nn.Module):
         if self.config._attn_implementation == "eager":
             queries = torch.tile(torch.unsqueeze(query_states, 0), (cache.cos.size(0), 1, 1, 1, 1))
             queries = apply_rotary_pos_emb(queries, cache.cos, cache.sin, unsqueeze_dim=2)
-            attn_output = hogwild_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
+            attn_output = async_reasoning_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
         else:
             rq = past_key_value.get_queries_buffer(query_states, layer_idx=self.layer_idx)
-            attn_output = hogwild_fused(
+            attn_output = async_reasoning_fused(
                 query_states,
                 cache.loc,
                 cache.keys,
@@ -440,7 +440,7 @@ class AttentionModuleForQwen3(nn.Module):
 
 
 class AttentionModuleForQwen3Moe(nn.Module):
-    """Modified attention layer adapted to HogwildCache.
+    """Modified attention layer adapted to AsyncReasoningCache.
     """
 
     def __init__(self, config: Qwen3MoeConfig, layer_idx: int):
@@ -502,10 +502,10 @@ class AttentionModuleForQwen3Moe(nn.Module):
         if self.config._attn_implementation == "eager":
             queries = torch.tile(torch.unsqueeze(query_states, 0), (cache.cos.size(0), 1, 1, 1, 1))
             queries = apply_rotary_pos_emb(queries, cache.cos, cache.sin, unsqueeze_dim=2)
-            attn_output = hogwild_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
+            attn_output = async_reasoning_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
         else:
             rq = past_key_value.get_queries_buffer(query_states, layer_idx=self.layer_idx)
-            attn_output = hogwild_fused(
+            attn_output = async_reasoning_fused(
                 query_states,
                 cache.loc,
                 cache.keys,
