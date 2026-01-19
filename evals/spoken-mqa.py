@@ -125,7 +125,10 @@ def main():
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
         
-        is_equal = response.strip() == answer.strip() if response else False
+        if args.use_local_judge:
+            is_equal = check_equality_local_model(model, tokenizer, response, answer)
+        else:
+            is_equal = check_equality_judge(response, answer)
 
         chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
         metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
