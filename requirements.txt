@@ -27,3 +27,6 @@ rpyc==6.0.1
 ffmpeg-python==0.2.0
 openai-whisper==20250625
 Jinja2==3.1.6
+
+# For SpokenMQA
+torchcodec==0.9.1
