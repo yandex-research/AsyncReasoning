@@ -12,7 +12,7 @@
   namespace ns {                                                               \
   template <class scalar_t>                                                    \
   cudaError_t                                                                  \
-  hogwild_attention_gpu(scalar_t *out, float scale, const int *locations,      \
+  async_reasoning_attention_gpu(scalar_t *out, float scale, const int *locations,      \
                         const scalar_t *queries, const int *fragment_lengths,  \
                         const scalar_t **key_fragments,                        \
                         const scalar_t **value_fragments, Shape shape);        \
@@ -53,139 +53,139 @@ DECL_KERNEL(v26)
 #undef DECL_KERNEL
 
 template <class scalar_t>
-cudaError_t hogwild_attention_gpu_dispatch(
+cudaError_t async_reasoning_attention_gpu_dispatch(
     scalar_t *out, float scale, const int *locations, const scalar_t *queries,
     const int *fragment_lengths, const scalar_t **key_fragments,
     const scalar_t **value_fragments, const Shape &shape,
     const std::string &version) {
   if (version == "v1") {
-    return v1::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v1::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v2") {
-    return v2::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v2::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v3") {
-    return v3::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v3::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v4") {
-    return v4::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v4::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v5") {
-    return v5::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v5::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v6") {
-    return v6::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v6::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v7") {
-    return v7::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v7::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v8") {
-    return v8::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v8::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v9") {
-    return v9::hogwild_attention_gpu(out, scale, locations, queries,
-                                     fragment_lengths, key_fragments,
-                                     value_fragments, shape);
+    return v9::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                             fragment_lengths, key_fragments,
+                                             value_fragments, shape);
   } else if (version == "v10") {
-    return v10::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v10::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v10b") {
-    return v10b::hogwild_attention_gpu(out, scale, locations, queries,
-                                       fragment_lengths, key_fragments,
-                                       value_fragments, shape);
+    return v10b::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                               fragment_lengths, key_fragments,
+                                               value_fragments, shape);
   } else if (version == "v11") {
-    return v11::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v11::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v11b") {
-    return v11b::hogwild_attention_gpu(out, scale, locations, queries,
-                                       fragment_lengths, key_fragments,
-                                       value_fragments, shape);
+    return v11b::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                               fragment_lengths, key_fragments,
+                                               value_fragments, shape);
   } else if (version == "v12") {
-    return v12::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v12::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v12b") {
-    return v12b::hogwild_attention_gpu(out, scale, locations, queries,
-                                       fragment_lengths, key_fragments,
-                                       value_fragments, shape);
+    return v12b::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                               fragment_lengths, key_fragments,
+                                               value_fragments, shape);
   } else if (version == "v13") {
-    return v13::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v13::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v13b") {
-    return v13b::hogwild_attention_gpu(out, scale, locations, queries,
-                                       fragment_lengths, key_fragments,
-                                       value_fragments, shape);
+    return v13b::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                               fragment_lengths, key_fragments,
+                                               value_fragments, shape);
   } else if (version == "v14") {
-    return v14::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v14::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v14b") {
-    return v14b::hogwild_attention_gpu(out, scale, locations, queries,
-                                       fragment_lengths, key_fragments,
-                                       value_fragments, shape);
+    return v14b::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                               fragment_lengths, key_fragments,
+                                               value_fragments, shape);
   } else if (version == "v15") {
-    return v15::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v15::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v15b") {
-    return v15b::hogwild_attention_gpu(out, scale, locations, queries,
-                                       fragment_lengths, key_fragments,
-                                       value_fragments, shape);
+    return v15b::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                               fragment_lengths, key_fragments,
+                                               value_fragments, shape);
   } else if (version == "v16") {
-    return v16::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v16::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v17") {
-    return v17::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v17::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v18") {
-    return v18::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v18::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v19") {
-    return v19::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v19::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v20") {
-    return v20::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v20::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v21") {
-    return v21::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v21::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v22") {
-    return v22::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v22::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v23") {
-    return v23::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v23::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v24") {
-    return v24::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v24::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v25") {
-    return v25::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v25::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else if (version == "v26") {
-    return v26::hogwild_attention_gpu(out, scale, locations, queries,
-                                      fragment_lengths, key_fragments,
-                                      value_fragments, shape);
+    return v26::async_reasoning_attention_gpu(out, scale, locations, queries,
+                                              fragment_lengths, key_fragments,
+                                              value_fragments, shape);
   } else {
     fprintf(stderr, "Invalid kernel version `%s`!", version.c_str());
     std::exit(1);

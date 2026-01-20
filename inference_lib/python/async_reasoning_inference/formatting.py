@@ -88,7 +88,7 @@ class CommonFormatting(FormattingBase):
         **formatting_kwargs
     ):
         if return_assistant_tokens_mask:
-            raise NotImplementedError("Hogwild chat template does not implement return_assistant_tokens_mask for now")
+            raise NotImplementedError("AsyncReasoning chat template does not implement return_assistant_tokens_mask for now")
         is_batched = not isinstance(problem_or_problems, str)
         problems = problem_or_problems if is_batched else [problem_or_problems]
         rendered = [self._apply_chat_template_once(problem, **formatting_kwargs) for problem in problems]
@@ -120,7 +120,7 @@ class CommonFormatting(FormattingBase):
         """Create a system prompt for 2 workers with rules and optional few-shot examples"""
         assert isinstance(problem, str)
         if continue_final_message or not add_generation_prompt:
-            raise NotImplementedError("Hogwild! apply_chat_template only implements generation prompt for now")
+            raise NotImplementedError("AsyncReasoning apply_chat_template only implements generation prompt for now")
         if prompt_style is None:
             conversation = [dict(role='user', content=problem)]
         elif prompt_style in {"first_person", "second_person"}:
