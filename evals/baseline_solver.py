@@ -34,24 +34,23 @@ class StreamRecorder(BaseStreamer):
         self.eos_ids = eos_ids
 
     def put(self, input_ids: torch.Tensor):
-        self.current_step += 1
         if self.eos_generated: # do not do anything after eos was generated
             return
-        if self.current_step == 0:
-            return # skip input ids
-        next_token, = input_ids.flatten().tolist()
-        if not self.in_thinking_mode:
-            token_times_item = (self.tokenizer.decode(next_token), time.perf_counter() - self.starting_time, self.current_step)
-            self.token_times.append(token_times_item)
-            if next_token in self.eos_ids:
-                self.eos_generated = True
-            self.writer_tokens.append(next_token)
-        else:
-            if next_token == self.tokenizer.vocab["</think>"]:
-                self.in_thinking_mode = False
-            self.thinker_tokens.append(next_token)
-        if self.display_generation_in_real_time:
-            self.display_tokens(self.writer_tokens, self.thinker_tokens)
+        if self.current_step > 0:
+            next_token, = input_ids.flatten().tolist()
+            if not self.in_thinking_mode:
+                token_times_item = (self.tokenizer.decode(next_token), time.perf_counter() - self.starting_time, self.current_step)
+                self.token_times.append(token_times_item)
+                if next_token in self.eos_ids:
+                    self.eos_generated = True
+                self.writer_tokens.append(next_token)
+            else:
+                if next_token == self.tokenizer.vocab["</think>"]:
+                    self.in_thinking_mode = False
+                self.thinker_tokens.append(next_token)
+            if self.display_generation_in_real_time:
+                self.display_tokens(self.writer_tokens, self.thinker_tokens)
+        self.current_step += 1
 
     def end(self):
         if len(self.token_times) == 0:
