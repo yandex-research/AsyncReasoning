@@ -14,6 +14,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["dependencies"]
 
+
 [project.optional-dependencies]
 test = [
   "pytest >=6",
@@ -27,6 +28,7 @@ experimental = true
 wheel.py-api = "cp310"
 build-dir = "build/{wheel_tag}"
 build.targets = ["asyncreasoningatt"]
+
 
 [tool.scikit-build.wheel.packages]
 "async_reasoning_inference" = "python/async_reasoning_inference"
