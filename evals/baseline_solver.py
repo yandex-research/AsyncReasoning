@@ -95,7 +95,10 @@ class BaselineSolver:
             problem: str,
             display_generation_in_real_time: bool = False,
             budget: int = 1024,
-        ):
+            temperature: float = 0.0,
+            top_p: float = 0.95,
+            top_k: int = 20,
+):
         if self.model.config.model_type.startswith("qwen3"):
             text = self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": problem}],
@@ -118,6 +121,10 @@ class BaselineSolver:
             return_dict_in_generate=True,
             output_scores=False,
             streamer=streamer,
+            temperature=temperature,
+            do_sample=temperature > 0.0,
+            top_p=top_p,
+            top_k=top_k,
         )
         return (
             self.tokenizer.decode(streamer.writer_tokens),
