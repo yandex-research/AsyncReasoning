@@ -1,6 +1,6 @@
 import torch
 import transformers
-from hogwild.attention import HogwildCache
+from async_reasoning_inference.attention import AsyncReasoningCache as AsyncReasoningInferenceCache
 from async_reasoning.cache import State
 
 import logging
@@ -30,7 +30,7 @@ class AsyncReasoningCacheFastKernels:
 
         def prefill_cache_block(text: str, blocks, write_to=None):
             write_to = blocks[-1] if write_to is None else write_to
-            tmp_cm = HogwildCache(cache_structure=[blocks], write_to=[write_to], model=model)
+            tmp_cm = AsyncReasoningInferenceCache(cache_structure=[blocks], write_to=[write_to], model=model)
             encoded = self.tokenizer(text, **self.tokenizer_kwargs)["input_ids"].to(self.device)
             with torch.inference_mode():
                 self.model(**tmp_cm.get_input_kwargs(encoded))
@@ -45,7 +45,7 @@ class AsyncReasoningCacheFastKernels:
                 block.key_cache[i] = block.key_cache[i][..., :0, :].contiguous()
                 block.value_cache[i] = block.value_cache[i][..., :0, :].contiguous()
             block._seen_tokens = 0
-        
+
         # encode each prompt section as LLM KV cache for use in generation
         prefill_cache_block(self.prompting.input_prompt, [self.input_prompt]) # <-- writes KV entries to last cache in list
         init_empty_block(self.input_block)
@@ -58,11 +58,11 @@ class AsyncReasoningCacheFastKernels:
         mode_switching_view = (self.mode_switching_prompt, self.input_block, self.thinker_output, self.writer_output, self.mode_switching_question)
 
         # prepare cache manager for each mode: only thinker, only writer and thinker+writer and mode switching
-        self.cm_thinker_only = HogwildCache(cache_structure=[thinker_view], model=model)
-        self.cm_writer_only = HogwildCache(cache_structure=[writer_view], model=model)
-        self.cm_thinker_and_writer = HogwildCache(cache_structure=[thinker_view, writer_view], model=model)
-        self.cm_mode_switching = HogwildCache(cache_structure=[mode_switching_view], model=model)
-        self.cm_input_only = HogwildCache(cache_structure=[[self.input_prompt, self.input_block]], write_to=[self.input_block], model=model)
+        self.cm_thinker_only = AsyncReasoningInferenceCache(cache_structure=[thinker_view], model=model)
+        self.cm_writer_only = AsyncReasoningInferenceCache(cache_structure=[writer_view], model=model)
+        self.cm_thinker_and_writer = AsyncReasoningInferenceCache(cache_structure=[thinker_view, writer_view], model=model)
+        self.cm_mode_switching = AsyncReasoningInferenceCache(cache_structure=[mode_switching_view], model=model)
+        self.cm_input_only = AsyncReasoningInferenceCache(cache_structure=[[self.input_prompt, self.input_block]], write_to=[self.input_block], model=model)
 
     # To catch and logg state change
     def __setattr__(self, name, value):

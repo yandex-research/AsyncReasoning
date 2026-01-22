@@ -7,8 +7,8 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import shared_cache
-from hogwild.attention import HogwildCache, model_surgery, merge_caches
-from hogwild.formatting import FormattingBase, MathFormatting, get_default_options_for_model
+from async_reasoning_inference.attention import AsyncReasoningCache, model_surgery, merge_caches
+from async_reasoning_inference.formatting import FormattingBase, MathFormatting, get_default_options_for_model
 
 
 device = "cuda"
@@ -77,7 +77,7 @@ def new_code(problem: str,
     tokens_since_last_wait = 0
     caches = tuple(transformers.DynamicCache() for _ in range(5))
     cache_common, cache_current_step_header, cache_own_header, cache_w1, cache_w2 = caches
-    cm = HogwildCache(cache_structure=[
+    cm = AsyncReasoningCache(cache_structure=[
         [cache_common, cache_current_step_header, cache_w2, cache_own_header, cache_w1],
         [cache_common, cache_current_step_header, cache_w1, cache_own_header, cache_w2],
     ], write_to=[cache_w1, cache_w2], model=model)
@@ -85,13 +85,13 @@ def new_code(problem: str,
     # pre-fill common cache parts
     with torch.inference_mode():
         model(**tokenizer(fmt.apply_chat_template(problem), **tokenizer_kwargs).to(device),
-              use_cache=True, past_key_values=HogwildCache([[cache_common]], model=model))  # <-- write to common prompt
+              use_cache=True, past_key_values=AsyncReasoningCache([[cache_common]], model=model))  # <-- write to common prompt
 
         model(**tokenizer(fmt.current_step_header, **tokenizer_kwargs).to(device),
-              use_cache=True, past_key_values=HogwildCache([[cache_current_step_header]], model=model))  # <-- write to the separator after history
+              use_cache=True, past_key_values=AsyncReasoningCache([[cache_current_step_header]], model=model))  # <-- write to the separator after history
 
         model(**tokenizer(fmt.current_worker_header, **tokenizer_kwargs).to(device),
-              use_cache=True, past_key_values=HogwildCache([[cache_own_header]], model=model))  # <-- write to separator between incomplete steps
+              use_cache=True, past_key_values=AsyncReasoningCache([[cache_own_header]], model=model))  # <-- write to separator between incomplete steps
 
         next_inputs = tokenizer(list(fmt.worker_prompts), **tokenizer_kwargs).to(device)
         model(**cm.get_input_kwargs(**next_inputs))

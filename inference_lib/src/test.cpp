@@ -1,5 +1,5 @@
 #include <random>
-#include "hogwild_cpu.h"
+#include "async_reasoning_cpu.h"
 #include <vector>
 #include <chrono>
 #include <fstream>
@@ -138,7 +138,7 @@ TestCase<scalar_t> make_test() {
         v_ptr.push_back(test_case.Values[i].data());
     }
 
-    hogwild_attention_cpu(test_case.Expected.data(), nullptr, nullptr, 1.f / sqrtf(128),
+    async_reasoning_attention_cpu(test_case.Expected.data(), nullptr, nullptr, 1.f / sqrtf(128),
                           test_case.Locations.data(), test_case.Queries.data(),
                           test_case.FragLen.data(), k_ptr.data(), v_ptr.data(), shape);
 
@@ -216,9 +216,9 @@ void run_tests(const std::string& source, const std::vector<std::string>& all_ke
     printf("input shape: %d x %d x %d x %d - kv: %d\n", test.Shape.W, test.Shape.Hq, test.Shape.S, test.Shape.Ev, kv_total);
     for(const auto& kernel_id : all_kernels) {
         CUDA_CHECK_THROW(cudaMemset(d_output, 0, test.Expected.size() * sizeof(scalar_t)));
-        auto error = hogwild_attention_gpu_dispatch(d_output, 1.f / sqrtf(128), d_locations, d_queries, d_frag_lengths,
-                                       (const scalar_t **) d_keys_ptr, (const scalar_t **) d_values_ptr, test.Shape,
-                                       kernel_id);
+        auto error = async_reasoning_attention_gpu_dispatch(d_output, 1.f / sqrtf(128), d_locations, d_queries, d_frag_lengths,
+                                                            (const scalar_t **) d_keys_ptr, (const scalar_t **) d_values_ptr, test.Shape,
+                                                            kernel_id);
         if(error != cudaSuccess) {
             printf("%s: %s\n", cudaGetErrorName(error), cudaGetErrorString(error));
             continue;
@@ -306,9 +306,9 @@ int main(int argc, const char** argv) {
         std::vector<float> cp(test.Expected.size());
         std::vector<float> as(test.Scores.size());
         std::vector<float> qk(test.QK.size());
-        hogwild_attention_cpu(cp.data(), as.data(), qk.data(), 1.f / sqrtf(128),
-                              test.Locations.data(), test.Queries.data(),
-                              test.FragLen.data(), k_ptr.data(), v_ptr.data(), test.Shape);
+        async_reasoning_attention_cpu(cp.data(), as.data(), qk.data(), 1.f / sqrtf(128),
+                                      test.Locations.data(), test.Queries.data(),
+                                      test.FragLen.data(), k_ptr.data(), v_ptr.data(), test.Shape);
 
         // check qk
         for(int i = 0; i < test.Scores.size(); ++i) {

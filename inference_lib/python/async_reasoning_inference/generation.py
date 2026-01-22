@@ -6,8 +6,8 @@ import numpy as np
 import torch
 import transformers
 
-from hogwild.attention import model_surgery, HogwildCache, merge_caches
-from hogwild.formatting import FormattingBase, MathFormatting
+from async_reasoning_inference.attention import model_surgery, AsyncReasoningCache, merge_caches
+from async_reasoning_inference.formatting import FormattingBase, MathFormatting
 
 ReasoningState = NamedTuple("ReasoningState", (
     ("history", Sequence[int]), ("current_step_tokens_by_worker", Sequence[Sequence[int]])),)
@@ -68,7 +68,7 @@ def generate_reasoning_2agents(
 
     tokens_since_last_wait = 0
     cache_common, cache_current_step_header, cache_own_header, cache_w1, cache_w2 = (transformers.DynamicCache() for _ in range(5))
-    cm = HogwildCache(cache_structure=[
+    cm = AsyncReasoningCache(cache_structure=[
         [cache_common, cache_current_step_header, cache_w2, cache_own_header, cache_w1],
         [cache_common, cache_current_step_header, cache_w1, cache_own_header, cache_w2],
     ], write_to=[cache_w1, cache_w2], model=model)
@@ -76,13 +76,13 @@ def generate_reasoning_2agents(
     # pre-fill common cache parts
     with torch.inference_mode():
         model(**tokenizer(fmt.apply_chat_template(problem), **tokenizer_kwargs).to(device),
-              use_cache=True, past_key_values=HogwildCache([[cache_common]], model=model))  # <-- write to common prompt
+              use_cache=True, past_key_values=AsyncReasoningCache([[cache_common]], model=model))  # <-- write to common prompt
 
         model(**tokenizer(fmt.current_step_header, **tokenizer_kwargs).to(device),
-              use_cache=True, past_key_values=HogwildCache([[cache_current_step_header]], model=model))  # <-- write to the separator after history
+              use_cache=True, past_key_values=AsyncReasoningCache([[cache_current_step_header]], model=model))  # <-- write to the separator after history
 
         model(**tokenizer(fmt.current_worker_header, **tokenizer_kwargs).to(device),
-              use_cache=True, past_key_values=HogwildCache([[cache_own_header]], model=model))  # <-- write to separator between incomplete steps
+              use_cache=True, past_key_values=AsyncReasoningCache([[cache_own_header]], model=model))  # <-- write to separator between incomplete steps
 
     #model = torch.compile(model)
 
@@ -160,7 +160,7 @@ def finalize_response_with_s1_finisher(
                                        device=device, dtype=torch.int64),
                 attention_mask=torch.ones(1, min(chunk_start + chunk_size, len(response_ids)),
                                           device=device, dtype=torch.int64),
-                use_cache=True, past_key_values=HogwildCache([[cache]], model=model)
+                use_cache=True, past_key_values=AsyncReasoningCache([[cache]], model=model)
             ).logits[..., -1, :]  # [batch_size(1), vocab_size]
             assert cache.get_seq_length() == min(chunk_start + chunk_size, len(response_ids))
 
@@ -170,7 +170,7 @@ def finalize_response_with_s1_finisher(
         for inference_step in range(max_new_tokens - 1):
             full_mask = torch.ones(next_tokens.shape[0], len(response_ids), device=device, dtype=torch.int64)
             next_logits = model(
-                input_ids=next_tokens, attention_mask=full_mask, use_cache=True, past_key_values=HogwildCache([[cache]], model=model)
+                input_ids=next_tokens, attention_mask=full_mask, use_cache=True, past_key_values=AsyncReasoningCache([[cache]], model=model)
             ).logits[..., -1, :]
             next_tokens = next_logits.argmax(-1, keepdims=True)  # [batch_size(1), 1]
             response_ids.append(next_tokens.item())

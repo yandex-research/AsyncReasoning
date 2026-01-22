@@ -4,8 +4,8 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
-#ifdef HOGDILD_ENABLE_FLOAT
-template cudaError_t v21::hogwild_attention_gpu<float>(
+#ifdef ASYNC_REASONING_ENABLE_FLOAT
+template cudaError_t v21::async_reasoning_attention_gpu<float>(
     float* out, float scale,
     const int* locations, const float* queries,
     const int* fragment_lengths,
@@ -15,8 +15,8 @@ template cudaError_t v21::hogwild_attention_gpu<float>(
 );
 #endif
 
-#ifdef HOGDILD_ENABLE_HALF
-template cudaError_t v21::hogwild_attention_gpu<half>(
+#ifdef ASYNC_REASONING_ENABLE_HALF
+template cudaError_t v21::async_reasoning_attention_gpu<half>(
     half* out, float scale,
     const int* locations, const half* queries,
     const int* fragment_lengths,
@@ -26,8 +26,8 @@ template cudaError_t v21::hogwild_attention_gpu<half>(
 );
 #endif
 
-#ifdef HOGDILD_ENABLE_BFLOAT
-template cudaError_t v21::hogwild_attention_gpu<nv_bfloat16>(
+#ifdef ASYNC_REASONING_ENABLE_BFLOAT
+template cudaError_t v21::async_reasoning_attention_gpu<nv_bfloat16>(
     nv_bfloat16* out, float scale,
     const int* locations, const nv_bfloat16* queries,
     const int* fragment_lengths,
