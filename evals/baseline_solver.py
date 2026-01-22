@@ -40,6 +40,7 @@ class BaselineSolver:
         self.eos_generated = False
     
     def forward_hook(self, model, _unused_args, output, **_unused_kwargs):
+        print(end="Entered hook\n")
         assert not _unused_args and not _unused_kwargs
         if self.eos_generated: # do not do anything after eos was generated
             return
@@ -49,11 +50,13 @@ class BaselineSolver:
             self.token_times.append(token_times_item)
             if next_token in self.eos_ids:
                 self.eos_generated = True
-            self.writer_tokens.append(next_token) 
+            self.writer_tokens.append(next_token)
+            print(end="Adder writer token\n")
         else:
             if next_token == self.tokenizer.vocab["</think>"]:
                 self.in_thinking_mode = False
-            self.thinker_tokens.append(next_token) 
+            self.thinker_tokens.append(next_token)
+            print(end="Adder thinker token\n")
         if self.display_generation_in_real_time:
             self.display_tokens(self.writer_tokens, self.thinker_tokens)
         self.current_step += 1
