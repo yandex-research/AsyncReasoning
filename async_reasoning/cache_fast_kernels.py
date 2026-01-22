@@ -37,7 +37,7 @@ class AsyncReasoningCacheFastKernels:
 
         def init_empty_block(block: transformers.DynamicCache):
             """Populate block with zero-length caches so it participates in structures without assertions."""
-            tmp_cm = HogwildCache(cache_structure=[[block]], write_to=[block], model=model)
+            tmp_cm = AsyncReasoningInferenceCache(cache_structure=[[block]], write_to=[block], model=model)
             dummy = self.tokenizer(" ", **self.tokenizer_kwargs)["input_ids"].to(self.device)
             with torch.inference_mode():
                 self.model(**tmp_cm.get_input_kwargs(dummy))
