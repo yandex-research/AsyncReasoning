@@ -78,7 +78,6 @@ class BaselineSolver:
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
         self.thinker_enabled = thinker_enabled
-        assert str(model.name_or_path).startswith("Qwen/Qwen3"), f"Support only Qwen3 for now, but {model.name_or_path} provided"
         self.eos_ids = model.generation_config.eos_token_id
         if isinstance(self.eos_ids, int):
             self.eos_ids = [self.eos_ids]
