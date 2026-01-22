@@ -18,6 +18,7 @@ logging.basicConfig(filename='demo.log', encoding='utf-8', level=logging.DEBUG)
 class StreamRecorder(BaseStreamer):
     def __init__(self,
                  tokenizer: transformers.PreTrainedTokenizerBase,
+                 end_of_thinking_token_ix,
                  thinker_enabled: bool = True,
                  display_generation_in_real_time: bool = False,
                  eos_ids: Sequence[int] = (),
@@ -25,6 +26,7 @@ class StreamRecorder(BaseStreamer):
         super().__init__()
         self.tokenizer = tokenizer
         self.in_thinking_mode = thinker_enabled
+        self.end_of_thinking_token_ix = end_of_thinking_token_ix
         self.display_generation_in_real_time = display_generation_in_real_time
         self.token_times = []
         self.current_step = 0
@@ -46,7 +48,7 @@ class StreamRecorder(BaseStreamer):
                     self.eos_generated = True
                 self.writer_tokens.append(next_token)
             else:
-                if next_token == self.tokenizer.vocab["</think>"]:
+                if self.thinker_tokens[-len(self.end_of_thinking_token_ix):] == self.end_of_thinking_token_ix:
                     self.in_thinking_mode = False
                 self.thinker_tokens.append(next_token)
             if self.display_generation_in_real_time:
@@ -109,6 +111,7 @@ class BaselineSolver:
         input_ids = self.tokenizer.encode(text, **self.tokenizer_kwargs).to(self.device)
         streamer = StreamRecorder(
             tokenizer=self.tokenizer,
+            end_of_thinking_token_ix=self.end_of_thinking_token_ix,
             thinker_enabled=self.thinker_enabled,
             display_generation_in_real_time=display_generation_in_real_time,
             eos_ids=self.eos_ids,
