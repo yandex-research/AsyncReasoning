@@ -1,9 +1,3 @@
-// Copyright (c) 2023-2024, Aalto University, developed by Erik Schultheis
-// Copyright (c) 2025 Institute of Science and Technology Austria (ISTA).
-// All rights reserved.
-//
-// SPDX-License-Identifier: MIT
-
 #pragma once
 
 #include <cstring>
