@@ -6,9 +6,6 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "async_reasoning_inference"
 version = "0.0.1"
-authors = [
-  { name = "Vyacheslav Zhdanovskiy", email = "zhdanovskiyvd@yandex-team.ru" },
-]
 description = "Efficient kernels for AsyncReasoning"
 readme = "README.md"
 requires-python = ">=3.10"
