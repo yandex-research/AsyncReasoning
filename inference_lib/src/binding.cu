@@ -36,7 +36,7 @@ scalar_t* torch_get_pointer(at::Tensor& tensor) {
 }
 
 template<class scalar_t>
-void hogwild_attention_tpl(
+void async_reasoning_attention_tpl(
         at::Tensor& out, double scale, const at::Tensor& locations, const at::Tensor& queries,
         const at::Tensor& fragment_lengths, const std::vector<at::Tensor>& key_fragments,
         const std::vector<at::Tensor>& value_fragments)
@@ -103,12 +103,12 @@ void hogwild_attention_tpl(
 
     // finally, launch
     Shape shape = {F, W, Hq, Hkv, E, Ev, S};
-    C10_CUDA_CHECK(v21::hogwild_attention_gpu(out_ptr, (float)scale, loc_ptr, query_ptr, fl_ptr,
+    C10_CUDA_CHECK(v21::async_reasoning_attention_gpu(out_ptr, (float)scale, loc_ptr, query_ptr, fl_ptr,
                           frag_ptrs, frag_ptrs + F, shape));
 }
 
 template<class scalar_t>
-void hogwild_rope_tpl(
+void async_reasoning_rope_tpl(
         at::Tensor& out, const at::Tensor& queries, const at::Tensor& cosines,
         const at::Tensor& sines)
 {
@@ -144,33 +144,33 @@ void hogwild_rope_tpl(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-void hogwild_attention(
+void async_reasoning_attention(
         at::Tensor& out, double scale, const at::Tensor& locations, const at::Tensor& queries,
         const at::Tensor& fragment_lengths, const std::vector<at::Tensor>& key_fragments,
         const std::vector<at::Tensor>& value_fragments)
 {
     if(out.dtype() == at::kHalf) {
-        hogwild_attention_tpl<half>(out, scale, locations, queries, fragment_lengths, key_fragments, value_fragments);
+        async_reasoning_attention_tpl<half>(out, scale, locations, queries, fragment_lengths, key_fragments, value_fragments);
     } else if (out.dtype() == at::kFloat) {
-        hogwild_attention_tpl<float>(out, scale, locations, queries, fragment_lengths, key_fragments, value_fragments);
+        async_reasoning_attention_tpl<float>(out, scale, locations, queries, fragment_lengths, key_fragments, value_fragments);
     } else if (out.dtype() == at::kBFloat16) {
-        hogwild_attention_tpl<nv_bfloat16>(out, scale, locations, queries, fragment_lengths, key_fragments, value_fragments);
+        async_reasoning_attention_tpl<nv_bfloat16>(out, scale, locations, queries, fragment_lengths, key_fragments, value_fragments);
     }
 }
 
-void hogwild_rope(
+void async_reasoning_rope(
         at::Tensor& out, const at::Tensor& queries, const at::Tensor& cosines, const at::Tensor& sines)
 {
     if(out.dtype() == at::kHalf) {
-        hogwild_rope_tpl<half>(out, queries, cosines, sines);
+        async_reasoning_rope_tpl<half>(out, queries, cosines, sines);
     } else if (out.dtype() == at::kFloat) {
-        hogwild_rope_tpl<float>(out, queries, cosines, sines);
+        async_reasoning_rope_tpl<float>(out, queries, cosines, sines);
     } else if (out.dtype() == at::kBFloat16) {
-        hogwild_rope_tpl<nv_bfloat16>(out, queries, cosines, sines);
+        async_reasoning_rope_tpl<nv_bfloat16>(out, queries, cosines, sines);
     }
 }
 
-void hogwild_fused(
+void async_reasoning_fused(
         at::Tensor& out, at::Tensor& rotated_queries, double scale, const at::Tensor& locations, const at::Tensor& queries,
         const at::Tensor& fragment_lengths, const std::vector<at::Tensor>& key_fragments,
         const std::vector<at::Tensor>& value_fragments,
@@ -184,8 +184,8 @@ void hogwild_fused(
         key_fragments_contiguous.push_back(key_fragments[i].contiguous());
         val_fragments_contiguous.push_back(value_fragments[i].contiguous());
     }
-    hogwild_rope(rotated_queries, queries, cosines, sines);
-    hogwild_attention(out, scale, locations, rotated_queries, fragment_lengths, key_fragments_contiguous, val_fragments_contiguous);
+    async_reasoning_rope(rotated_queries, queries, cosines, sines);
+    async_reasoning_attention(out, scale, locations, rotated_queries, fragment_lengths, key_fragments_contiguous, val_fragments_contiguous);
 }
 
 extern "C" {
@@ -193,10 +193,10 @@ extern "C" {
    The import from Python will load the .so consisting of this file
    in this extension, so that the TORCH_LIBRARY static initializers
    below are run. */
-PyObject* PyInit_libhogatt(void) {
+PyObject* PyInit_libasyncreasoningatt(void) {
     static struct PyModuleDef module_def = {
             PyModuleDef_HEAD_INIT,
-            "libhogatt", /* name of module */
+            "libasyncreasoningatt", /* name of module */
             NULL,            /* module documentation, may be NULL */
             -1,              /* size of per-interpreter state of the module,
                      or -1 if the module keeps state in global variables. */
@@ -206,18 +206,18 @@ PyObject* PyInit_libhogatt(void) {
 }
 }
 
-TORCH_LIBRARY(libhogatt, m) {
+TORCH_LIBRARY(libasyncreasoningatt, m) {
     std::vector<at::Tag> tags;
     tags.push_back(at::Tag::needs_fixed_stride_order);
-    m.def("hogwild_sdpa(Tensor(a!) output, float scale, Tensor locations, Tensor queries, "
+    m.def("async_reasoning_sdpa(Tensor(a!) output, float scale, Tensor locations, Tensor queries, "
           "Tensor fragment_lengths, Tensor[] key_fragments, Tensor[] value_fragments) -> ()", tags, torch::_RegisterOrVerify::REGISTER);
-    m.def("hogwild_rope(Tensor(a!) output, Tensor queries, Tensor cosines, Tensor sines) -> ()", tags, torch::_RegisterOrVerify::REGISTER);
-    m.def("hogwild_fused(Tensor(a!) output, Tensor(b!) rq, float scale, Tensor locations, Tensor queries, "
+    m.def("async_reasoning_rope(Tensor(a!) output, Tensor queries, Tensor cosines, Tensor sines) -> ()", tags, torch::_RegisterOrVerify::REGISTER);
+    m.def("async_reasoning_fused(Tensor(a!) output, Tensor(b!) rq, float scale, Tensor locations, Tensor queries, "
           "Tensor fragment_lengths, Tensor[] key_fragments, Tensor[] value_fragments, Tensor cosines, Tensor sines) -> ()", tags, torch::_RegisterOrVerify::REGISTER);
 }
 
-TORCH_LIBRARY_IMPL(libhogatt, CUDA, m) {
-    m.impl("hogwild_sdpa", hogwild_attention);
-    m.impl("hogwild_rope", hogwild_rope);
-    m.impl("hogwild_fused", hogwild_fused);
+TORCH_LIBRARY_IMPL(libasyncreasoningatt, CUDA, m) {
+    m.impl("async_reasoning_sdpa", async_reasoning_attention);
+    m.impl("async_reasoning_rope", async_reasoning_rope);
+    m.impl("async_reasoning_fused", async_reasoning_fused);
 }
