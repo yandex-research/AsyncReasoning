@@ -1,4 +1,4 @@
-# For hogwild
+# For async_reasoning
 accelerate==1.6.0
 datasets==3.5.0
 numpy>=2.2.4
