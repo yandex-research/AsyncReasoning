@@ -81,7 +81,7 @@ def check_equality_judge(
     token, url, model = config["token"], config["url"], config["model"]
     if not token:
         raise Exception(f"Please specify your API token in {config_path}")
-    headers = {"Authorization": f"OAuth {token}"}
+    headers = {"Authorization": f"OAuth {token}", "Ya-Pool": "YR_all"}
     messages=[{"role": "user", "content": prompt}]
     payload = {
         "model": model, 
