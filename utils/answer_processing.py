@@ -81,7 +81,8 @@ def check_equality_judge(
     token, url, model = config["token"], config["url"], config["model"]
     if not token:
         raise Exception(f"Please specify your API token in {config_path}")
-    headers = {"Authorization": f"OAuth {token}", "Ya-Pool": "YR_all"}
+    # headers = {"Authorization": f"OAuth {token}", "Ya-Pool": "YR_all"}
+    headers = {"Authorization": f"OAuth {token}"}
     messages=[{"role": "user", "content": prompt}]
     payload = {
         "model": model, 
@@ -92,6 +93,7 @@ def check_equality_judge(
     with warnings.catch_warnings(action="ignore"):
         response_json = requests.post(url, json=payload, headers=headers, verify=False).json()
     # response_text = response_json['response']['content'][0]["text"]
+    print(response_json)
     response_text = response_json['response']['choices'][0]["message"]['content']
     return response_text.lower().strip() == "yes"
 
