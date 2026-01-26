@@ -64,7 +64,7 @@ class AsyncReasoningSolver:
         yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
         no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
 
-        delta = 2
+        delta = 5
         should_continue_writing = (probs[..., yes_id] + delta > probs[..., no_id]).item()
         logger.debug(f'control: should continue writing? {should_continue_writing}')
         return should_continue_writing
