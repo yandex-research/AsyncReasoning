@@ -41,8 +41,8 @@ Sometimes, an automated system will ask you to decide if your thoughts have enou
 Your goal is to give frequent updates on your progress. Prioritize safety first, then accuracy. Reason step by step. Give enough information for the system to begin responding to the user as soon as possible.
 
 Solve the following problem:
-{problem}<|im_end|>
-<|im_start|>assistant""".strip()
+{problem}
+""".strip()
 
         self.writer_split = " SYSTEM: [additional thoughts will appear here]\n</think>\n"
         self.thinker_split = " SYSTEM: [the system will continute writing the response here]"
@@ -54,3 +54,14 @@ Solve the following problem:
         # these questions are inserted to change mode depending on model answers
         self.thinker_control_question = "\n\n SYSTEM: Given the reasoning above, is the next step of the response ready and verified for output to the user? (yes/no): "
         self.yes_token, self.no_token = "yes", "no"
+
+        # compatibility attributes for cache interface (maps to standard prompting.py interface)
+        self.input_prompt = self.thinker_prompt + "\n"
+        self.mode_switching_prompt = f"""
+<|im_start|>user
+You are an AI assistant that can think and write responses concurrently, and you must decide whether or not you should pause writing and think more.
+Read the current partial thoughts and response below, then decide whether you can continue writing the response without pausing (yes/no):
+ - Answer "yes" if your thoughts have enough information to write the next response paragraph, even if the full task is not solved yet.
+ - Answer "no" if your thoughts aren't enough to write the next response paragraph, i.e. if your response ran out of of thoughts.
+""".strip() + "\n"
+        self.mode_switching_question = "...\n\nWait, are my current thoughts enough to write the next paragraph or formula? (yes/no): "

@@ -45,9 +45,23 @@ def parse_args():
         "--mode",
         type=str,
         required=True,
-        choices=["async_reasoning", "baseline_think", "baseline_no_think"],
-        help="Select reasoning mode",
+        choices=[
+            "baseline_no_think",
+            "baseline_think",
+            "async_reasoning",
+            "async_reasoning_safety",
+            "async_reasoning_safety_blocked"
+        ],
+        help="Select evaluation mode"
     )
+
+    parser.add_argument(
+        "--writer-block-tokens",
+        type=int,
+        default=1024,
+        help="Number of tokens to block writer (for async_reasoning_safety_blocked mode)"
+    )
+
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
     parser.add_argument("--use-slow-kernel", action="store_true", default=False, help="Disable fast kernel")
@@ -90,6 +104,32 @@ def main():
             "use_fast_kernel": use_fast_kernel,
             "end_of_think_token_ix": end_of_think_token_ix,
         })
+    elif args.mode in ["async_reasoning_safety", "async_reasoning_safety_blocked"]:
+        from async_reasoning.jailbreak_solver import JailbreakAsyncReasoningSolver as Solver
+        system_tokens = [
+            key for key in tokenizer.vocab.keys()
+            if key.endswith("SYSTEM") or key.endswith("SYSTEM:")
+        ]
+        writer_forbidden_token_ix = [
+            tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens
+        ]
+        thinker_forbidden_token_ix = [
+            tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens
+        ]
+        end_of_think_token_ix = [tokenizer.vocab[x] for x in ["</think>"]]
+
+        writer_block_tokens = (
+            args.writer_block_tokens if args.mode == "async_reasoning_safety_blocked" else 0
+        )
+
+        solver_kwargs.update({
+            "writer_forbidden_token_ix": writer_forbidden_token_ix,
+            "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
+            "use_fast_kernel": use_fast_kernel,
+            "end_of_think_token_ix": end_of_think_token_ix,
+            "writer_block_tokens": writer_block_tokens,
+        })
+    
     elif args.mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
