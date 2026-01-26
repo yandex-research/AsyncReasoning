@@ -59,13 +59,13 @@ class AsyncReasoningSolver:
             cache.mode_switching_question.clear()
         next_inputs = self.tokenizer(prompting.mode_switching_question, **self.tokenizer_kwargs).to(self.device)
 
-        logits = self.model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
-        probs = logits.softmax(-1)
-        yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
-        no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
+        #logits = self.model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
+        #probs = logits.softmax(-1)
+        #yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
+        #no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
 
-        delta = 10
-        should_continue_writing = (probs[..., yes_id] + delta > probs[..., no_id]).item()
+        #delta = 10
+        should_continue_writing = True#(probs[..., yes_id] + delta > probs[..., no_id]).item()
         logger.debug(f'control: should continue writing? {should_continue_writing}')
         return should_continue_writing
 
