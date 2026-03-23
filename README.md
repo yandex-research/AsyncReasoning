@@ -6,6 +6,24 @@ Supplementary code for **Asynchronous Reasoning: Training-Free Interactive Think
 
 More detailed instructions will be added shortly. However, you should be able to run the method itself with the current version.
 
+## Live terminal demo
+
+![AsyncReasoning live demo](ar_full_text_live_demo.gif)
+
+Visualises thinker and writer streams side-by-side in real time, with a mode-switch log at the bottom.
+
+**Requirements:** `pip install rich` (in addition to the main dependencies).
+
+```bash
+# default problem
+python live_demo.py
+
+# with fast CUDA kernels, specified model, a smaller budget and a custom problem
+USE_FAST_KERNEL=1 MODEL_NAME=Qwen/Qwen3-32B BUDGET=512 python live_demo.py "What is 17 * 38?"
+```
+
+The visualisation stays on screen after generation finishes — press **Enter** to exit.
+
 ## How to run eval demo (Qwen3-32B requires a 80GB GPU, can be adapted to 48GB):
 
 1. Create a new python environment (conda / venv) - we tested python 3.14.
