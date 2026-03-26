@@ -69,12 +69,13 @@ class AsyncReasoningSolver:
         return should_continue_writing
 
     def display_tokens(self,
-        writer_output_tokens: Sequence[int], 
-        thinker_output_tokens: Sequence[int], 
+        writer_output_tokens: Sequence[int],
+        thinker_output_tokens: Sequence[int],
         state: State,
+        thinker_prefix_len: int = 0,
         ):
         writer_headers, thinker_headers = ["\n\n## Writer mode\n\n", "\n\n## Thinker mode\n\n"]
-        writer_text, thinker_text = [self.tokenizer.decode(seq) for seq in [writer_output_tokens, thinker_output_tokens[4:]]]
+        writer_text, thinker_text = [self.tokenizer.decode(seq) for seq in [writer_output_tokens, thinker_output_tokens[thinker_prefix_len:]]]
         clear_output(True)
         raw = f"# {state}" + "".join([thinker_headers, thinker_text, writer_headers, writer_text])
         display(Markdown(raw))
@@ -104,6 +105,7 @@ class AsyncReasoningSolver:
 
         writer_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
         thinker_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
+        thinker_prefix_len = len(thinker_output_tokens)
         eos_generated = False
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
         with torch.inference_mode():
@@ -143,7 +145,7 @@ class AsyncReasoningSolver:
                     cache.state = State.thinker_and_writer if self.check_if_should_continue_writing(cache, prompting) else State.thinker_only
 
                 if display_generation_in_real_time:
-                    self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state)
+                    self.display_tokens(writer_output_tokens, thinker_output_tokens, cache.state, thinker_prefix_len)
                 if writer_output_tokens[-1] == self.tokenizer.eos_token_id:
                     eos_generated = True
 

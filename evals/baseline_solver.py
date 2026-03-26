@@ -20,6 +20,7 @@ class StreamRecorder(BaseStreamer):
                  thinker_enabled: bool = True,
                  display_generation_in_real_time: bool = False,
                  eos_ids: Sequence[int] = (),
+                 end_of_think_token_id: int = None,
                  ):
         super().__init__()
         self.tokenizer = tokenizer
@@ -32,6 +33,7 @@ class StreamRecorder(BaseStreamer):
         self.writer_tokens = []
         self.eos_generated = False
         self.eos_ids = eos_ids
+        self.end_of_think_token_id = end_of_think_token_id
 
     def put(self, input_ids: torch.Tensor):
         if self.eos_generated: # do not do anything after eos was generated
@@ -45,7 +47,7 @@ class StreamRecorder(BaseStreamer):
                     self.eos_generated = True
                 self.writer_tokens.append(next_token)
             else:
-                if next_token == self.tokenizer.vocab["</think>"]:
+                if self.end_of_think_token_id is not None and next_token == self.end_of_think_token_id:
                     self.in_thinking_mode = False
                 self.thinker_tokens.append(next_token)
             if self.display_generation_in_real_time:
@@ -72,12 +74,16 @@ class BaselineSolver:
         thinker_enabled: bool = True,
         **kwargs
     ):
+        # Sanity check
+        if model.config.architectures == ["LlamaForCausalLM"]:
+            assert thinker_enabled == False, "Thinker mode is not supported for Llama"
+
         self.model = prepare_model_for_inference(model, **kwargs)
         self.device = model.device
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
         self.thinker_enabled = thinker_enabled
-        assert str(model.name_or_path).startswith("Qwen/Qwen3"), f"Support only Qwen3 for now, but {model.name_or_path} provided"
+        self.end_of_think_token_id = tokenizer.vocab.get("</think>")
         self.eos_ids = model.generation_config.eos_token_id
         if isinstance(self.eos_ids, int):
             self.eos_ids = [self.eos_ids]
@@ -87,11 +93,12 @@ class BaselineSolver:
             display_generation_in_real_time: bool = False,
             budget: int = 1024,
         ):
+        template_kwargs = {"enable_thinking": True} if self.thinker_enabled else {}
         text = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": problem}],
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=self.thinker_enabled
+            **template_kwargs
         )
         input_ids = self.tokenizer.encode(text, **self.tokenizer_kwargs).to(self.device)
         streamer = StreamRecorder(
@@ -99,6 +106,7 @@ class BaselineSolver:
             thinker_enabled=self.thinker_enabled,
             display_generation_in_real_time=display_generation_in_real_time,
             eos_ids=self.eos_ids,
+            end_of_think_token_id=self.end_of_think_token_id,
         )
         outputs = self.model.generate(input_ids,
             max_new_tokens=budget,

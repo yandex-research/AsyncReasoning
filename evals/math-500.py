@@ -77,13 +77,21 @@ def main():
         args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
     )
 
+    if args.mode == "baseline_think" and model.config.architectures == ["LlamaForCausalLM"]:
+        raise ValueError("Thinking mode is not supported for Llama")
+
     solver_kwargs = {}
     if args.mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
-        writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
-        thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
-        end_of_think_token_ix = [tokenizer.vocab[x] for x in ["</think>"]]
+        if model.config.architectures == ["LlamaForCausalLM"]:
+            writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|begin_of_text|>", "<|end_of_text|>", "<|eot_id|>"] + system_tokens]
+            thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|begin_of_text|>", "<|end_of_text|>", "<|eot_id|>"] + system_tokens]
+            end_of_think_token_ix = [tokenizer.vocab[x] for x in ["<|end_of_text|>", "<|eot_id|>"]]
+        elif model.config.architectures == ["Qwen3ForCausalLM"]:
+            writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
+            thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
+            end_of_think_token_ix = [tokenizer.vocab[x] for x in ["</think>"]]
         solver_kwargs.update({
             "writer_forbidden_token_ix": writer_forbidden_token_ix,
             "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
