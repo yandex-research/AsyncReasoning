@@ -139,7 +139,7 @@ class AsyncReasoningSolver:
                 
                 if cache.state != State.writer_only and thinker_output_tokens[-1] in self.end_of_think_token_ix:
                     cache.state = State.writer_only
-                if cache.state != State.writer_only and ((step + 1) % 25 == 0 or self.is_end_of_step(thinker_output_tokens)):  # ask thinker if we can continue writing
+                if cache.state != State.writer_only and ((step + 1) % 30 == 0 or self.is_end_of_step(thinker_output_tokens)):  # ask thinker if we can continue writing
                     cache.state = State.thinker_and_writer if self.check_if_should_continue_writing(cache, prompting) else State.thinker_only
 
                 if display_generation_in_real_time:
