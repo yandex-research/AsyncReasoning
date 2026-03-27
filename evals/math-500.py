@@ -73,6 +73,8 @@ def main():
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = transformers.AutoModelForCausalLM.from_pretrained(
         args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
     )

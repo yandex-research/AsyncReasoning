@@ -9,6 +9,7 @@ from transformers import Cache
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
+from transformers.models.llama.configuration_llama import LlamaConfig
 
 
 #############################################################################
@@ -523,6 +524,86 @@ class AttentionModuleForQwen3Moe(nn.Module):
         return attn_output, None
 
 
+class AttentionModuleForLlama(nn.Module):
+    """Modified attention layer adapted to AsyncReasoningCache for Llama models."""
+
+    def __init__(self, config: LlamaConfig, layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.scaling = self.head_dim ** -0.5
+        self.is_causal = True
+
+        attention_bias = getattr(config, "attention_bias", False)
+        self.q_proj = nn.Linear(
+            config.hidden_size, config.num_attention_heads * self.head_dim, bias=attention_bias
+        )
+        self.k_proj = nn.Linear(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=attention_bias
+        )
+        self.v_proj = nn.Linear(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=attention_bias
+        )
+        self.o_proj = nn.Linear(
+            config.num_attention_heads * self.head_dim, config.hidden_size, bias=attention_bias
+        )
+
+    def forward(
+            self,
+            hidden_states: torch.Tensor,
+            position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+            attention_mask: Optional[torch.Tensor],
+            past_key_value: Optional[AsyncReasoningCache] = None,
+            cache_position: torch.LongTensor = None,
+            position_ids: Optional[torch.Tensor] = None,
+            **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        if input_shape[0] != 1:
+            assert position_ids is not None, "When processing multiple workers, `position_ids` are mandatory"
+
+        if position_ids is not None:
+            assert position_ids.shape == hidden_states.shape[:-1], (position_ids.shape, hidden_states.shape)
+
+        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        # queries will be rotated for individual segments, so nothing to do here
+        key_states = apply_rotary_pos_emb(key_states, cos, sin)
+
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position, 'mask': attention_mask}
+        cache: CacheStructure = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        if self.config._attn_implementation == "eager":
+            queries = torch.tile(torch.unsqueeze(query_states, 0), (cache.cos.size(0), 1, 1, 1, 1))
+            queries = apply_rotary_pos_emb(queries, cache.cos, cache.sin, unsqueeze_dim=2)
+            attn_output = async_reasoning_sdpa_pt(queries, cache.loc, cache.keys, cache.values, self.scaling, False)
+        else:
+            rq = past_key_value.get_queries_buffer(query_states, layer_idx=self.layer_idx)
+            attn_output = async_reasoning_fused(
+                query_states,
+                cache.loc,
+                cache.keys,
+                cache.values,
+                self.scaling,
+                cache.frags,
+                cache.cos, cache.sin,
+                rotated_queries=rq,
+                out=past_key_value.get_att_buffer(rq, layer_idx=self.layer_idx),
+            )
+
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = self.o_proj(attn_output)
+        return attn_output, None
+
+
 def model_surgery(model):
     for l in model.model.layers:
         old = l.self_attn
@@ -536,6 +617,8 @@ def model_surgery(model):
             l.self_attn = AttentionModuleForQwen3Moe(model.model.config, l.self_attn.layer_idx)
             l.self_attn.q_norm = old.q_norm
             l.self_attn.k_norm = old.k_norm
+        elif isinstance(model.config, LlamaConfig):
+            l.self_attn = AttentionModuleForLlama(model.model.config, l.self_attn.layer_idx)
         else:
             raise NotImplementedError(f"Unsupported model type: {model.config.__class__}")
 

@@ -64,6 +64,8 @@ def generate_reasoning_2agents(
     saved_states = dict()
     logits_processor = get_logits_processor(model, suppress_tokens)
     device = next(model.parameters()).device
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     tokenizer_kwargs = dict(return_tensors='pt', padding=True, padding_side='left', add_special_tokens=False)
 
     tokens_since_last_wait = 0
