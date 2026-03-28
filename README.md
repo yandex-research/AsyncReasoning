@@ -6,6 +6,10 @@ Supplementary code for **Asynchronous Reasoning: Training-Free Interactive Think
 
 More detailed instructions will be added shortly. However, you should be able to run the method itself with the current version.
 
+## Live terminal demo
+
+![AsyncReasoning live demo](ar_full_text_live_demo.gif)
+
 ## How to run eval demo (Qwen3-32B requires a 80GB GPU, can be adapted to 48GB):
 
 1. Create a new python environment (conda / venv) - we tested python 3.14.
