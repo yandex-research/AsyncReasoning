@@ -11,9 +11,11 @@ Environment variables:
     BUDGET          Max generation steps  (default: 1024)
     MAX_LOG_LINES   Lines in the log pane (default: 8)
     USE_FAST_KERNEL Use fast CUDA kernels (default: 0)
+    LOG_FILE        Path for visualization log (default: live_demo_output.log)
 """
 
 import argparse
+import logging
 import os
 import sys
 import torch
@@ -26,10 +28,13 @@ from rich.panel import Panel
 from rich.live import Live
 from rich.text import Text
 
+viz_logger = logging.getLogger("live_demo.viz")
+
 sys.path.insert(0, ".")
 
 from async_reasoning.cache import State
 from async_reasoning.live_solver import LiveSolver
+from async_reasoning.prompting import AsyncReasoningPrompting
 
 # ── Config ────────────────────────────────────────────────────────────────────
 MODEL_NAME      = os.environ.get("MODEL_NAME", "Qwen/Qwen3-32B")
@@ -37,6 +42,7 @@ BUDGET          = int(os.environ.get("BUDGET", "1024"))
 MAX_LOG_LINES   = int(os.environ.get("MAX_LOG_LINES", "8"))
 USE_FAST_KERNEL = os.environ.get("USE_FAST_KERNEL", "0") == "1"
 DEFAULT_PROBLEM = r"Calculate x - x^2 + x^3 for x = 5,6,7,8. Return all 4 answers in \boxed{ }."
+LOG_FILE        = os.environ.get("LOG_FILE", "live_demo_output.log")
 
 # ── State colours ─────────────────────────────────────────────────────────────
 _STATE_COLOR = {
@@ -54,13 +60,24 @@ class LiveDisplay:
     The solver callbacks just mutate the fields; the refresh loop picks them up.
     """
 
-    def __init__(self, console: Console, problem: str = "", max_log: int = 8):
+    def __init__(self, console: Console, problem: str = "",
+                 input_prompt: str = "", thinker_output_prefix: str = "",
+                 writer_output_prefix: str = "",
+                 thinker_prefix_ntokens: int = 0, writer_prefix_ntokens: int = 0,
+                 mode_switch_question: str = "", max_log: int = 8):
         self.console  = console
         self.problem  = problem
+        self.input_prompt = input_prompt
+        self.thinker_output_prefix = thinker_output_prefix  # <|im_end|>\n<|im_start|>assistant\n<think>\n
+        self.writer_output_prefix = writer_output_prefix      # ... [SYSTEM: ...]\n</think>\n
+        self.thinker_prefix_ntokens = thinker_prefix_ntokens
+        self.writer_prefix_ntokens = writer_prefix_ntokens
+        # collapse to single line for compact log display
+        self.mode_switch_question = " ".join(mode_switch_question.split()).strip()
         self.max_log  = max_log
         self.log: deque[str] = deque(maxlen=max_log)
-        self._thinker = ""
-        self._writer  = ""
+        self._thinker_gen  = ""   # thinker generated text only (no prefix)
+        self._writer_gen   = ""   # writer generated text only (no prefix)
         self._state   = State.thinker_only
         self._step    = 0
 
@@ -69,13 +86,23 @@ class LiveDisplay:
     def on_tokens(self, writer_tokens, thinker_tokens, token_times, eos, state, tokenizer, step=0):
         self._state  = state
         self._step   = step
-        # skip the 4-token prefix (<|im_end|>\n<|im_start|>assistant\n<think>\n)
-        self._thinker = tokenizer.decode(thinker_tokens[4:])
-        self._writer  = tokenizer.decode(writer_tokens)
+        # thinker: skip prefix tokens to get generated text only
+        self._thinker_gen = tokenizer.decode(thinker_tokens[self.thinker_prefix_ntokens:])
+        # writer: skip prefix tokens to get generated text only
+        self._writer_gen = tokenizer.decode(writer_tokens[self.writer_prefix_ntokens:])
+        # log every 50 steps for post-run inspection
+        if step % 50 == 0:
+            viz_logger.info(
+                "step=%d state=%s\n── thinker ──\n%s%s\n── writer ──\n%s%s",
+                step, state.name,
+                self.thinker_output_prefix, self._thinker_gen,
+                self.writer_output_prefix, self._writer_gen,
+            )
 
     def on_mode_switch(self, step: int, answer: bool):
         tag = "[bold green]YES[/bold green]" if answer else "[bold red] NO[/bold red]"
-        self.log.append(f"[dim]step {step:5d}[/dim] │ continue writing? → {tag}")
+        self.log.append(f"[dim]step {step:5d}[/dim] │ {self.mode_switch_question} → {tag}")
+        viz_logger.info("step=%d mode_switch=%s", step, "YES" if answer else "NO")
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -104,39 +131,90 @@ class LiveDisplay:
         color      = _STATE_COLOR.get(self._state, "white")
         state_name = self._state.name if self._state else "unknown"
 
-        # header: 2 rows (state line + prompt line), log panel, main panel borders
-        header_size = 2
-        panel_rows  = max(4, (h - header_size - self.max_log - 4) * 3 // 4)
-        # inner width of each half-panel (border chars on each side)
+        # sizing
+        prompt_size = 4            # fixed prompt panel height
+        header_size = 1
         panel_width = max(20, w // 2 - 4)
+        total_main  = max(8, h - header_size - prompt_size - self.max_log - 4)
+        own_rows    = max(3, total_main * 2 // 3)
+        other_rows  = max(2, total_main - own_rows)
 
         layout = Layout()
         layout.split_column(
             Layout(name="header", size=header_size),
+            Layout(name="prompt", size=prompt_size),
             Layout(name="main"),
             Layout(name="log", size=self.max_log + 2),
         )
         layout["main"].split_row(
-            Layout(name="thinker"),
-            Layout(name="writer"),
+            Layout(name="thinker_col"),
+            Layout(name="writer_col"),
+        )
+        layout["thinker_col"].split_column(
+            Layout(name="thinker_other", ratio=1),
+            Layout(name="thinker_own", ratio=2),
+        )
+        layout["writer_col"].split_column(
+            Layout(name="writer_other", ratio=1),
+            Layout(name="writer_own", ratio=2),
         )
 
-        prompt_display = self.problem if len(self.problem) <= w - 4 else self.problem[:w - 7] + "…"
-        header_text = Text()
-        header_text.append(f" ● {state_name}   step: {self._step}\n", style=f"bold {color}")
-        header_text.append(f" {prompt_display}", style="dim")
-        layout["header"].update(header_text)
+        # ── header (state + step) ────────────────────────────────────────────
+        layout["header"].update(
+            Text(f" ● {state_name}   step: {self._step}", style=f"bold {color}")
+        )
 
-        layout["thinker"].update(Panel(
-            Text(self._tail_visual_rows(self._thinker, panel_rows, panel_width), overflow="fold"),
+        # ── user prompt panel ─────────────────────────────────────────────────
+        layout["prompt"].update(Panel(
+            Text(self.input_prompt, style="dim", overflow="fold"),
+            title="[dim]User Prompt[/dim]",
+            border_style="dim",
+        ))
+
+        # ── helper: dim prefix (always visible) + trimmed body ────────────────
+        def _prefixed(prefix: str, body: str, max_rows: int, pw: int) -> Text:
+            """Render *prefix* (dim, always shown) followed by the tail of *body*."""
+            prefix_lines = prefix.count("\n") + 1
+            body_rows = max(1, max_rows - prefix_lines)
+            trimmed = self._tail_visual_rows(body, body_rows, pw)
+            text = Text(overflow="fold")
+            text.append(prefix, style="dim")
+            text.append(trimmed)
+            return text
+
+        # ── Thinker column ────────────────────────────────────────────────────
+        # top: writer output (previous turn in thinker view) with </think> prefix
+        layout["thinker_other"].update(Panel(
+            _prefixed(self.writer_output_prefix, self._writer_gen,
+                      other_rows, panel_width),
+            title="[dim]Writer output (previous turn in thinker view)[/dim]",
+            border_style="dim yellow",
+        ))
+        # bottom: <|im_end|><|im_start|>assistant<think> (dim, fixed) + generated thinker
+        layout["thinker_own"].update(Panel(
+            _prefixed(self.thinker_output_prefix, self._thinker_gen,
+                      own_rows, panel_width),
             title="[bold yellow]THINKER[/bold yellow]",
             border_style="yellow",
         ))
-        layout["writer"].update(Panel(
-            Text(self._tail_visual_rows(self._writer, panel_rows, panel_width), overflow="fold"),
+
+        # ── Writer column ─────────────────────────────────────────────────────
+        # top: <|im_end|><|im_start|>assistant<think> (dim, fixed) + thinker generated
+        layout["writer_other"].update(Panel(
+            _prefixed(self.thinker_output_prefix, self._thinker_gen,
+                      other_rows, panel_width),
+            title="[dim]Thinker context (<think> block in writer view)[/dim]",
+            border_style="dim blue",
+        ))
+        # bottom: ...[SYSTEM: ...]</think> (dim, fixed) + writer generated
+        layout["writer_own"].update(Panel(
+            _prefixed(self.writer_output_prefix, self._writer_gen,
+                      own_rows, panel_width),
             title="[bold blue]WRITER[/bold blue]",
             border_style="blue",
         ))
+
+        # ── log ───────────────────────────────────────────────────────────────
         layout["log"].update(Panel(
             Text.from_markup("\n".join(self.log) or "[dim]no checks yet…[/dim]"),
             title="[bold]Mode Switch Log[/bold]",
@@ -154,6 +232,12 @@ def main():
     args = parser.parse_args()
     problem = args.problem
 
+    # set up visualization log file
+    fh = logging.FileHandler(LOG_FILE, mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    viz_logger.addHandler(fh)
+    viz_logger.setLevel(logging.INFO)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     console = Console()
@@ -168,7 +252,22 @@ def main():
     writer_forbidden  = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + sys_toks]
     thinker_forbidden = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>"] + sys_toks]
 
-    display = LiveDisplay(console, problem=problem, max_log=MAX_LOG_LINES)
+    prompting = AsyncReasoningPrompting(problem)
+    tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
+    # +1 for the \n\n token the solver appends after each prefix
+    thinker_prefix_ntokens = len(tokenizer.encode(prompting.thinker_output_prefix, **tokenizer_kwargs).flatten()) + 1
+    writer_prefix_ntokens = len(tokenizer.encode(prompting.writer_output_prefix, **tokenizer_kwargs).flatten()) + 1
+
+    display = LiveDisplay(
+        console, problem=problem,
+        input_prompt=prompting.input_prompt,
+        thinker_output_prefix=prompting.thinker_output_prefix,
+        writer_output_prefix=prompting.writer_output_prefix,
+        thinker_prefix_ntokens=thinker_prefix_ntokens,
+        writer_prefix_ntokens=writer_prefix_ntokens,
+        mode_switch_question=prompting.mode_switching_question,
+        max_log=MAX_LOG_LINES,
+    )
 
     solver = LiveSolver(
         model=model,
@@ -179,7 +278,7 @@ def main():
         use_fast_kernel=USE_FAST_KERNEL,
     )
 
-    with Live(display, console=console, refresh_per_second=4, screen=True) as live:
+    with Live(display, console=console, refresh_per_second=10, screen=True) as live:
         writer_out, thinker_out, token_times, eos = solver.solve(
             problem,
             budget=BUDGET,
@@ -187,10 +286,17 @@ def main():
         )
         if not eos:
             display.on_mode_switch(-1, False)  # surface budget-exhausted hint in log
+        viz_logger.info(
+            "FINAL step=%d eos=%s\n── thinker ──\n%s%s\n── writer ──\n%s%s",
+            solver._step, eos,
+            display.thinker_output_prefix, display._thinker_gen,
+            display.writer_output_prefix, display._writer_gen,
+        )
         live.update(display)
         input("\n  Generation complete — press Enter to exit…")
 
     console.print(f"\n[bold]Writer output:[/bold]\n{writer_out}")
+    console.print(f"\n[dim]Visualization log: {LOG_FILE}[/dim]")
 
 
 if __name__ == "__main__":
