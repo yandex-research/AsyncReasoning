@@ -112,13 +112,21 @@ class LiveDisplay:
 
         A single logical line (no newline) wraps across ceil(len/panel_width)
         terminal rows, so this counts visual rows rather than newline count.
-        Drops whole logical lines from the top — never mid-token.
+        Drops whole logical lines from the top.  If even the last line is
+        longer than the budget, truncate it from the left so the tail is
+        always visible (never returns empty for non-empty input).
         """
         lines = text.split("\n")
         kept, rows = [], 0
         for line in reversed(lines):
             line_rows = max(1, (len(line) + panel_width - 1) // panel_width)
             if rows + line_rows > max_rows:
+                if not kept:
+                    # line too long — strip wrapped rows from front until it fits
+                    while line and line_rows > max_rows:
+                        line = line[panel_width:]
+                        line_rows = max(1, (len(line) + panel_width - 1) // panel_width)
+                    kept.append(line)
                 break
             kept.append(line)
             rows += line_rows
@@ -136,8 +144,10 @@ class LiveDisplay:
         header_size = 1
         panel_width = max(20, w // 2 - 4)
         total_main  = max(8, h - header_size - prompt_size - self.max_log - 4)
-        own_rows    = max(3, total_main * 2 // 3)
-        other_rows  = max(2, total_main - own_rows)
+        # each panel gets half the space, trimmed to 3/4 of available; -2 for panel borders
+        panel_rows  = max(3, total_main * 3 // 4 // 2 - 2)
+        own_rows    = panel_rows
+        other_rows  = panel_rows
 
         layout = Layout()
         layout.split_column(
@@ -150,13 +160,11 @@ class LiveDisplay:
             Layout(name="thinker_col"),
             Layout(name="writer_col"),
         )
-        layout["thinker_col"].split_column(
-            Layout(name="thinker_other", ratio=1),
-            Layout(name="thinker_own", ratio=2),
-        )
+        # thinker doesn't see writer — single panel, no split
+
         layout["writer_col"].split_column(
             Layout(name="writer_other", ratio=1),
-            Layout(name="writer_own", ratio=2),
+            Layout(name="writer_own", ratio=1),
         )
 
         # ── header (state + step) ────────────────────────────────────────────
@@ -171,45 +179,45 @@ class LiveDisplay:
             border_style="dim",
         ))
 
-        # ── helper: dim prefix (always visible) + trimmed body ────────────────
-        def _prefixed(prefix: str, body: str, max_rows: int, pw: int) -> Text:
-            """Render *prefix* (dim, always shown) followed by the tail of *body*."""
-            prefix_lines = prefix.count("\n") + 1
-            body_rows = max(1, max_rows - prefix_lines)
-            trimmed = self._tail_visual_rows(body, body_rows, pw)
+        # ── helper ─────────────────────────────────────────────────────────────
+        def _visual_row_count(s: str, pw: int) -> int:
+            return sum(max(1, (len(ln) + pw - 1) // pw) for ln in s.split("\n"))
+
+        def _panel_text(prefix: str, body: str, max_rows: int, pw: int) -> Text:
+            """Dim *prefix* + tail of *body*, fitting exactly within *max_rows*.
+            Drops prefix when body needs the space."""
+            prefix_rows = _visual_row_count(prefix, pw)
+            body_budget = max_rows - prefix_rows
             text = Text(overflow="fold")
-            text.append(prefix, style="dim")
-            text.append(trimmed)
+            if body_budget >= 2:
+                trimmed = self._tail_visual_rows(body, body_budget, pw)
+                text.append(prefix, style="dim")
+                text.append(trimmed)
+            else:
+                trimmed = self._tail_visual_rows(body, max_rows, pw)
+                text.append(trimmed)
             return text
 
-        # ── Thinker column ────────────────────────────────────────────────────
-        # top: writer output (previous turn in thinker view) with </think> prefix
-        layout["thinker_other"].update(Panel(
-            _prefixed(self.writer_output_prefix, self._writer_gen,
-                      other_rows, panel_width),
-            title="[dim]Writer output (previous turn in thinker view)[/dim]",
-            border_style="dim yellow",
-        ))
-        # bottom: <|im_end|><|im_start|>assistant<think> (dim, fixed) + generated thinker
-        layout["thinker_own"].update(Panel(
-            _prefixed(self.thinker_output_prefix, self._thinker_gen,
-                      own_rows, panel_width),
+        # ── Thinker column (single panel — thinker doesn't see writer) ────────
+        # use full column height for the thinker's own output
+        thinker_rows = max(3, own_rows + other_rows)
+        layout["thinker_col"].update(Panel(
+            _panel_text(self.thinker_output_prefix, self._thinker_gen,
+                        thinker_rows, panel_width),
             title="[bold yellow]THINKER[/bold yellow]",
             border_style="yellow",
         ))
 
         # ── Writer column ─────────────────────────────────────────────────────
-        # top: <|im_end|><|im_start|>assistant<think> (dim, fixed) + thinker generated
         layout["writer_other"].update(Panel(
-            _prefixed(self.thinker_output_prefix, self._thinker_gen,
-                      other_rows, panel_width),
+            _panel_text(self.thinker_output_prefix, self._thinker_gen,
+                        other_rows, panel_width),
             title="[dim]Thinker context (<think> block in writer view)[/dim]",
             border_style="dim blue",
         ))
-        # bottom: ...[SYSTEM: ...]</think> (dim, fixed) + writer generated
         layout["writer_own"].update(Panel(
-            _prefixed(self.writer_output_prefix, self._writer_gen,
-                      own_rows, panel_width),
+            _panel_text(self.writer_output_prefix, self._writer_gen,
+                        own_rows, panel_width),
             title="[bold blue]WRITER[/bold blue]",
             border_style="blue",
         ))
