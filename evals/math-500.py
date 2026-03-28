@@ -45,7 +45,11 @@ def parse_args():
         "--mode",
         type=str,
         required=True,
-        choices=["async_reasoning", "baseline_think", "baseline_no_think"],
+        choices=[
+            "async_reasoning", "baseline_think", "baseline_no_think",
+            "async_reasoning_safety", "async_reasoning_safety_blocked",
+            "async_reasoning_safety_interrupt", "async_reasoning_safety_entropy",
+        ],
         help="Select reasoning mode",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
@@ -57,6 +61,7 @@ def parse_args():
     parser.add_argument("--path-to-results", type=str, help="path to store exp results", default="./eval_results/math-500")
     parser.add_argument("--dump_snapshot_freq", type=int, default=4, help="yandex-internal snapshotting frequency")
     parser.add_argument("--device_map", type=str, default="auto", help="passed to model.from_pretrained")
+    parser.add_argument("--writer-block-tokens", type=int, default=1024, help="Number of tokens to block writer (safety_blocked mode)")
     return parser.parse_args()
 
 
@@ -78,18 +83,34 @@ def main():
     )
 
     solver_kwargs = {}
-    if args.mode in ["async_reasoning"]:
-        from async_reasoning.solver import AsyncReasoningSolver as Solver
+    if args.mode in ["async_reasoning"] or args.mode.startswith("async_reasoning_safety"):
         system_tokens = [key for key in tokenizer.vocab.keys() if key.endswith("SYSTEM") or key.endswith("SYSTEM:")]
         writer_forbidden_token_ix = [tokenizer.vocab[x] for x in ["</think>", "<|im_start|>", "<|endoftext|>"] + system_tokens]
         thinker_forbidden_token_ix = [tokenizer.vocab[x] for x in ["<|im_start|>", "<|im_end|>", "<|endoftext|>"] + system_tokens]
         end_of_think_token_ix = [tokenizer.vocab[x] for x in ["</think>"]]
-        solver_kwargs.update({
-            "writer_forbidden_token_ix": writer_forbidden_token_ix,
-            "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
-            "use_fast_kernel": use_fast_kernel,
-            "end_of_think_token_ix": end_of_think_token_ix,
-        })
+
+        if args.mode == "async_reasoning":
+            from async_reasoning.solver import AsyncReasoningSolver as Solver
+            solver_kwargs.update({
+                "writer_forbidden_token_ix": writer_forbidden_token_ix,
+                "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
+                "use_fast_kernel": use_fast_kernel,
+                "end_of_think_token_ix": end_of_think_token_ix,
+            })
+        else:
+            from async_reasoning.jailbreak_solver import JailbreakAsyncReasoningSolver as Solver
+            writer_block_tokens = (
+                args.writer_block_tokens if args.mode == "async_reasoning_safety_blocked" else 0
+            )
+            solver_kwargs.update({
+                "writer_forbidden_token_ix": writer_forbidden_token_ix,
+                "thinker_forbidden_token_ix": thinker_forbidden_token_ix,
+                "use_fast_kernel": use_fast_kernel,
+                "end_of_think_token_ix": end_of_think_token_ix,
+                "writer_block_tokens": writer_block_tokens,
+                "safety_interrupt": (args.mode == "async_reasoning_safety_interrupt"),
+                "entropy_switching": (args.mode == "async_reasoning_safety_entropy"),
+            })
     elif args.mode in ["baseline_think", "baseline_no_think"]:
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
@@ -120,8 +141,12 @@ def main():
 
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
-        writer_output_str, thinker_output_str, token_times, eos_generated = \
-            solver.solve(problem, budget=args.budget)
+        solve_result = solver.solve(problem, budget=args.budget)
+        if len(solve_result) == 5:
+            writer_output_str, thinker_output_str, token_times, eos_generated, analytics = solve_result
+        else:
+            writer_output_str, thinker_output_str, token_times, eos_generated = solve_result
+            analytics = None
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
 
@@ -143,6 +168,7 @@ def main():
             "correct_answer": answer,
             "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
+            "analytics": analytics.to_dict() if analytics is not None else {},
         }
         accuracy_numerator += int(is_equal)
         accuracy_denominator += 1
