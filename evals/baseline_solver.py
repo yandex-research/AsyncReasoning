@@ -34,6 +34,7 @@ class StreamRecorder(BaseStreamer):
         self.eos_ids = eos_ids
 
     def put(self, input_ids: torch.Tensor):
+        return
         if self.eos_generated: # do not do anything after eos was generated
             return
         if self.current_step > 0:
