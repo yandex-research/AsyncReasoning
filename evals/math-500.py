@@ -13,7 +13,7 @@ import torch
 import transformers
 from tqdm import tqdm
 
-from tts_evaluator import TTSEvaluator
+# from tts_evaluator import TTSEvaluator
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
 from utils.task_queue import TaskQueue
@@ -107,7 +107,7 @@ def main():
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/math-500/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
-    evaluator = TTSEvaluator()
+    # evaluator = TTSEvaluator()
 
     def _solve_task_and_save(idx: int):
         save_path = f"{exp_dir_path}/sample_{idx}.json"
@@ -130,13 +130,14 @@ def main():
         else:
             is_equal = check_equality_judge(response, answer)
 
-        chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
-        metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
+        # chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
+        # metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
         total_delay = metrics["total_delay"]
         result = {
             "idx": idx,
             "is_equal": is_equal,
-            "metrics": metrics,
+            # "metrics": metrics,
+            "metrics": "Did not run tts!",
             "token_times": token_times,
             "eos_generated": eos_generated,
             "response_answers": response,
