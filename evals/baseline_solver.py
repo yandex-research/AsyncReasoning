@@ -72,7 +72,8 @@ class BaselineSolver:
         thinker_enabled: bool = True,
         **kwargs
     ):
-        self.model = prepare_model_for_inference(model, **kwargs)
+        # self.model = prepare_model_for_inference(model, **kwargs)
+        self.model = model
         self.device = model.device
         self.tokenizer = tokenizer
         self.tokenizer_kwargs = dict(add_special_tokens=False, return_tensors='pt', padding=True, padding_side='left')
