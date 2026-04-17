@@ -34,7 +34,7 @@ class StreamRecorder(BaseStreamer):
         self.eos_ids = eos_ids
 
     def put(self, input_ids: torch.Tensor):
-        return
+        # return
         if self.eos_generated: # do not do anything after eos was generated
             return
         if self.current_step > 0:
@@ -46,8 +46,8 @@ class StreamRecorder(BaseStreamer):
                     self.eos_generated = True
                 self.writer_tokens.append(next_token)
             else:
-                if next_token == self.tokenizer.vocab["</think>"]:
-                    self.in_thinking_mode = False
+                # if next_token == self.tokenizer.vocab["</think>"]:
+                #     self.in_thinking_mode = False
                 self.thinker_tokens.append(next_token)
             if self.display_generation_in_real_time:
                 self.display_tokens(self.writer_tokens, self.thinker_tokens)
