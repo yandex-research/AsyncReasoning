@@ -14,6 +14,52 @@ import triton.language as tl
 USE_TRITON = bool(int(os.environ.get("USE_TRITON", "1")))
 
 
+# transformers >=4.55 replaced DynamicCache's flat self.key_cache/self.value_cache lists with
+# self.layers[i].keys / self.layers[i].values. We provide a view that exposes the old shape
+# without duplicating storage, so the rest of this module keeps using self.key_cache / self.value_cache.
+_NEW_CACHE_API = hasattr(transformers.cache_utils, "DynamicLayer")
+
+
+class _LayerTensorView:
+    """A list-like view of `parent.layers[*].<attr>` ('keys' or 'values') for backwards compat."""
+
+    def __init__(self, parent: "CacheBlock", attr: str):
+        self._parent = parent
+        self._attr = attr
+
+    def __len__(self) -> int:
+        return len(self._parent.layers)
+
+    def _layer_tensor(self, layer) -> torch.Tensor:
+        if not getattr(layer, "is_initialized", True):
+            return torch.empty(0)
+        return getattr(layer, self._attr)
+
+    def __getitem__(self, layer_idx: int) -> torch.Tensor:
+        return self._layer_tensor(self._parent.layers[layer_idx])
+
+    def __setitem__(self, layer_idx: int, tensor: torch.Tensor) -> None:
+        layer = self._parent.layers[layer_idx]
+        if not getattr(layer, "is_initialized", True) and tensor.numel() > 0:
+            layer.lazy_initialization(tensor)
+        setattr(layer, self._attr, tensor)
+
+    def append(self, tensor: torch.Tensor) -> None:
+        from transformers.cache_utils import DynamicLayer
+        layer = DynamicLayer()
+        if tensor.numel() > 0:
+            layer.lazy_initialization(tensor)
+        setattr(layer, self._attr, tensor)
+        self._parent.layers.append(layer)
+
+    def clear(self) -> None:
+        self._parent.layers.clear()
+
+    def __iter__(self):
+        for layer in self._parent.layers:
+            yield self._layer_tensor(layer)
+
+
 class CacheBlock(transformers.cache_utils.DynamicCache):
     """
     A key-value cache block that stores a sequence of tokens that can be stacked with other caches.
@@ -32,12 +78,53 @@ class CacheBlock(transformers.cache_utils.DynamicCache):
         super().__init__(*args, **kwargs)
         self.config = config
         self.first_available_positions_by_layer = dict()
+        if not hasattr(self, '_seen_tokens'):
+            self._seen_tokens = 0
+        # qwen3_5-style hybrid cache: per-layer recurrent state for linear-attention layers.
+        # Standard full-attention CacheBlocks leave these empty.
+        self.linear_conv_states: Dict[int, torch.Tensor] = {}
+        self.linear_recurrent_states: Dict[int, torch.Tensor] = {}
+        # Per-layer GDN affine summary `(A_hat, B_hat)` for this block's linear-attention tokens.
+        # A_hat shape: [1, num_heads, d_k, d_k]; B_hat shape: [1, num_heads, d_v, d_k] (block conv).
+        # Composing affines along a worker's chain gives the recurrent state at the end of the chain.
+        # Missing layer entry = identity affine (no tokens contributed yet through this layer).
+        self.linear_affine: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
+
+    if _NEW_CACHE_API:
+        @property
+        def key_cache(self) -> _LayerTensorView:
+            return _LayerTensorView(self, "keys")
+
+        @property
+        def value_cache(self) -> _LayerTensorView:
+            return _LayerTensorView(self, "values")
 
     def get_kv_with_offset(self, *, layer_idx: int, offset: int):
         """Get key-value pairs rotated so that the first value has position :offset:"""
-        assert len(self.key_cache) > layer_idx, "cache must be fully populated before it can accept None args"
+        if layer_idx >= len(self.key_cache):
+            return torch.empty(0), torch.empty(0)
         key_cache, value_cache = self.key_cache[layer_idx], self.value_cache[layer_idx]
+        if key_cache.numel() == 0:
+            return key_cache, value_cache
         return rotate_by_offset(keys=key_cache, offset=offset, config=self.config), value_cache
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        """Return KV-cache length for the given layer. For hybrid models where layer 0 might be a
+        linear-attention layer with no KV cache, fall back to the first layer that actually has
+        cache so callers (mask construction, position math) get the right KV length."""
+        # Try the requested layer first.
+        if layer_idx < len(self.key_cache):
+            n = self.key_cache[layer_idx].shape[-2] if self.key_cache[layer_idx].numel() > 0 else 0
+            if n > 0:
+                return n
+            # If the requested layer has nothing, fall back to scanning. This handles hybrid
+            # models (Qwen3.5) where the caller defaulted to layer_idx=0 but layer 0 is GDN.
+            if layer_idx == 0:
+                for i in range(len(self.key_cache)):
+                    k = self.key_cache[i]
+                    if k.numel() > 0:
+                        return k.shape[-2]
+        return 0
 
     def append(self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int, cache_kwargs: Dict[str, Any],
                ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -63,11 +150,17 @@ class CacheBlock(transformers.cache_utils.DynamicCache):
         return self.append(*args, **kwargs)
 
     def clear(self):
-        """Delete all cache entries in-place"""
+        """Delete all cache entries in-place — both the full-attention KV layers and the
+        GDN linear-attention affine/conv/recurrent state. The latter is critical for blocks
+        that get clear()'d and re-prefilled (e.g. `mode_switching_question`), otherwise the
+        stale affine carries into the next forward and contaminates the result."""
         self.key_cache.clear()
         self.value_cache.clear()
         self._seen_tokens = 0
         self.first_available_positions_by_layer.clear()
+        self.linear_conv_states.clear()
+        self.linear_recurrent_states.clear()
+        self.linear_affine.clear()
 
     def append_from(self, other: CacheBlock, keep_other: bool = True):
         """Add tokens from other to the end of this block in-place. If not keep_other, calls other.clear()"""
@@ -87,11 +180,12 @@ class CacheBlock(transformers.cache_utils.DynamicCache):
         """
         Keep only the first `keep_first` tokens in each layer's KV cache.
         Truncates tensors in-place and updates bookkeeping fields.
+        No-op if the cache already has at most `keep_first` tokens.
         """
         if keep_first < 0:
             raise ValueError(f"keep_first must be >= 0, got {keep_first}")
-        if self._seen_tokens < keep_first:
-            raise ValueError(f"keep_first must be <= _seen_tokens = {self._seen_tokens}, got {keep_first}")
+        if self.get_seq_length() <= keep_first:
+            return  # nothing to trim
 
         for layer_idx in range(len(self.key_cache)):
             k = self.key_cache[layer_idx]
@@ -286,8 +380,11 @@ def _get_rope_init(config: transformers.PretrainedConfig, device: torch.device):
     if (config, device) == _CACHED_ROPE_PARAMS:
         return _CACHED_ROPE_INIT
 
-    if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-        rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
+    # transformers >=5.0 moved rope parameters from config.rope_scaling into config.rope_parameters
+    if hasattr(config, "rope_parameters") and config.rope_parameters is not None:
+        rope_type = config.rope_parameters.get("rope_type", "default")
+    elif hasattr(config, "rope_scaling") and config.rope_scaling is not None:
+        rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type", "default"))
     else:
         rope_type = "default"
 
@@ -302,7 +399,25 @@ def _get_rope_init(config: transformers.PretrainedConfig, device: torch.device):
             warnings.warn(f"untested model type {config.model_type}")
         config_init = config
 
-    inv_freq, attention_scaling = transformers.modeling_rope_utils.ROPE_INIT_FUNCTIONS[rope_type](config_init, device)
+    rope_fns = transformers.modeling_rope_utils.ROPE_INIT_FUNCTIONS
+    if rope_type in rope_fns:
+        inv_freq, attention_scaling = rope_fns[rope_type](config_init, device)
+    elif rope_type == "default":
+        # transformers >=5.0 removed the "default" entry from ROPE_INIT_FUNCTIONS — recompute inline
+        # exactly the way the per-model RotaryEmbedding.compute_default_rope_parameters does.
+        if hasattr(config_init, "rope_parameters") and config_init.rope_parameters is not None:
+            base = config_init.rope_parameters["rope_theta"]
+        else:
+            base = getattr(config_init, "rope_theta")
+        dim = getattr(config_init, "head_dim", None) or (
+            config_init.hidden_size // config_init.num_attention_heads
+        )
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+        )
+        attention_scaling = 1.0
+    else:
+        raise KeyError(f"Unknown rope_type {rope_type!r} (available: {list(rope_fns)})")
     _CACHED_ROPE_PARAMS, _CACHED_ROPE_INIT = (config, device), (inv_freq, attention_scaling)
     assert "dynamic" not in rope_type
     return inv_freq, attention_scaling

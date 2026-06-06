@@ -42,7 +42,14 @@ class CombinedCacheView(transformers.cache_utils.Cache):
             override_length: Optional[int] = None,
             rotary_cache: Optional[dict] = None
     ):
-        super().__init__()
+        # transformers >=4.55 requires Cache.__init__ to receive an explicit `layers` arg
+        # (empty list is fine) or `layer_class_to_replicate`. CombinedCacheView overrides
+        # update/get_seq_length itself, so we just pass empty layers to satisfy parent.
+        try:
+            super().__init__(layers=[])
+        except TypeError:
+            # older transformers (<4.55) where Cache.__init__ takes no arguments
+            super().__init__()
         assert write_to is None or len(write_to) == len(cache_structure)
         assert input_mask is None or len(input_mask) == len(cache_structure)
         assert position_ids is None or len(position_ids) == len(cache_structure)
@@ -121,6 +128,16 @@ class CombinedCacheView(transformers.cache_utils.Cache):
                                 for worker_sequence in self.cache_structure]
         return max(worker_cache_lengths)
 
+    def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int = 0) -> Tuple[int, int]:
+        """transformers >=4.55 calls this to size the causal mask. We return left-padded
+        keys/values of length max_length_per_worker (= override_length once set by
+        SharedCacheManager), starting at offset 0."""
+        if self.override_length is not None:
+            return self.override_length, 0
+        # Fallback: no shared_cache_manager configured override_length. The cache hasn't yet
+        # been written for the current step, so kv_length = current cached length + new query length.
+        return self.get_seq_length(layer_idx) + cache_position.shape[0], 0
+
     # v-- fixes https://huggingface.co/deepseek-ai/DeepSeek-R1/blob/56d4cbbb4d29f4355bab4b9a39ccb717a14ad5ad/modeling_deepseek.py#L1654
     def get_max_length(self, *args, **kwargs):
         pass
@@ -131,7 +148,11 @@ class CombinedCacheView(transformers.cache_utils.Cache):
     def get_usable_length(self, new_seq_length: int, layer_idx: Optional[int] = 0):
         if self.override_length is not None:
             return self.override_length - new_seq_length
-        return super().get_usable_length(new_seq_length, layer_idx=layer_idx)
+        # transformers >=4.55 removed Cache.get_usable_length; emulate the previous behaviour
+        # for dynamic-length caches (no max length => usable length is just the existing seq length).
+        if hasattr(super(), "get_usable_length"):
+            return super().get_usable_length(new_seq_length, layer_idx=layer_idx)
+        return self.get_seq_length(layer_idx=layer_idx)
 
 
 def combine_cache_from_structure(cache_structure: Sequence[Sequence[CacheBlock]], layer_idx: int) -> Tuple[

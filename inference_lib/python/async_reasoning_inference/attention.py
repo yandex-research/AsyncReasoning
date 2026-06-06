@@ -11,6 +11,44 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig
 
 
+# Transformers >=4.55 replaced DynamicCache.key_cache/.value_cache (flat lists) with
+# self.layers[i].keys / .values via DynamicLayer. These tiny helpers read/write the right
+# location for either version, and let the rest of the file keep its straightforward
+# `cs.key_cache[L]` style without per-access branching.
+def _layer_keys(cache, layer_idx: int) -> torch.Tensor:
+    if hasattr(cache, "layers"):
+        layer = cache.layers[layer_idx]
+        return layer.keys if getattr(layer, "is_initialized", True) else torch.empty(0)
+    return cache.key_cache[layer_idx]
+
+
+def _layer_values(cache, layer_idx: int) -> torch.Tensor:
+    if hasattr(cache, "layers"):
+        layer = cache.layers[layer_idx]
+        return layer.values if getattr(layer, "is_initialized", True) else torch.empty(0)
+    return cache.value_cache[layer_idx]
+
+
+def _set_layer_keys(cache, layer_idx: int, tensor: torch.Tensor) -> None:
+    if hasattr(cache, "layers"):
+        cache.layers[layer_idx].keys = tensor
+    else:
+        cache.key_cache[layer_idx] = tensor
+
+
+def _set_layer_values(cache, layer_idx: int, tensor: torch.Tensor) -> None:
+    if hasattr(cache, "layers"):
+        cache.layers[layer_idx].values = tensor
+    else:
+        cache.value_cache[layer_idx] = tensor
+
+
+def _num_layers(cache) -> int:
+    if hasattr(cache, "layers"):
+        return len(cache.layers)
+    return len(cache.key_cache)
+
+
 #############################################################################
 # Kernel
 #########
@@ -121,6 +159,14 @@ class AsyncReasoningCache(Cache):
             model,
             write_to: Optional[List[Cache]] = None,
     ):
+        # transformers >=4.55 requires Cache.__init__ to receive `layers=[]` or
+        # `layer_class_to_replicate`. We pass an empty list; the model goes through our custom
+        # attention path (via model_surgery) so the parent's lazy layer machinery is unused.
+        try:
+            super().__init__(layers=[])
+        except TypeError:
+            # older transformers (<4.55) take no args
+            super().__init__()
         self.model = model.model
         self.cache_structure = cache_structure
         self.write_to = write_to if write_to else [cl[-1] for cl in cache_structure]
@@ -136,6 +182,20 @@ class AsyncReasoningCache(Cache):
         # TODO THIS IS WRONG IF WE DO MERGING
         return self.cache_structure[0][-1].get_seq_length()
 
+    def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int = 0) -> "tuple[int, int]":
+        """transformers >=4.55 calls this to size the causal mask. Return the longest worker's
+        full chain length plus the new query tokens; offset is always 0 (we pad on the left).
+
+        The default `Cache.get_mask_sizes` reads `self.layers[layer_idx]`, which doesn't exist
+        on this cache — model_surgery replaces the attention layers with our custom kernels,
+        but the causal-mask construction still runs in the unpatched part of the model."""
+        max_chain_len = 0
+        for chain in self.cache_structure:
+            chain_len = sum(b.get_seq_length(layer_idx) for b in chain)
+            max_chain_len = max(max_chain_len, chain_len)
+        query_length = cache_position.shape[0]
+        return max_chain_len + query_length, 0
+
     def update(
             self,
             key_states: torch.Tensor,
@@ -146,13 +206,17 @@ class AsyncReasoningCache(Cache):
         # update the worker caches
         assert key_states.shape[0] == len(self.cache_structure)
 
-        # assume each batch index corresponds to one worker
+        # Resolve mask. In old transformers we received the original 2D attention_mask
+        # [batch, seq_len] here; in transformers >=4.55 the attention layer is handed
+        # an already-prepared 4D causal mask. AR's fast-kernel flow always feeds the
+        # cache complete (un-padded) token chunks, so we only act on a 2D mask and
+        # treat anything else as "no padding to skip".
         mask: Optional[torch.Tensor] = cache_kwargs.get('mask', None)
-        if mask is not None:
+        if mask is not None and mask.ndim == 2:
             new_tokens_per_worker = torch.sum(mask, dim=1)
             # assuming left-masking; only copy non-masked KVs to the cache
             for w in range(key_states.shape[0]):
-                n = new_tokens_per_worker[w]
+                n = int(new_tokens_per_worker[w])  # tensor -> Python int so slicing works
                 # B H L D
                 self.write_to[w].update(key_states[w:w + 1, :, -n:, :], value_states[w:w + 1, :, -n:, :], layer_idx, cache_kwargs)
         else:
@@ -160,8 +224,8 @@ class AsyncReasoningCache(Cache):
                 self.write_to[w].update(key_states[w:w + 1, ...], value_states[w:w + 1, ...], layer_idx, cache_kwargs)
 
         for cs in self.segments:
-            cs.key_cache[layer_idx] = cs.key_cache[layer_idx].contiguous()
-            cs.value_cache[layer_idx] = cs.value_cache[layer_idx].contiguous()
+            _set_layer_keys(cs, layer_idx, _layer_keys(cs, layer_idx).contiguous())
+            _set_layer_values(cs, layer_idx, _layer_values(cs, layer_idx).contiguous())
 
         if layer_idx == 0:
             mapping: Dict[int, InternalCacheMeta] = {}
@@ -211,8 +275,8 @@ class AsyncReasoningCache(Cache):
         keys = []
         vals = []
         for cs in self.segments:
-            keys.append(cs.key_cache[layer_idx].contiguous())
-            vals.append(cs.value_cache[layer_idx].contiguous())
+            keys.append(_layer_keys(cs, layer_idx).contiguous())
+            vals.append(_layer_values(cs, layer_idx).contiguous())
         return CacheStructure(keys=keys, values=vals, cos=self.cosines, sin=self.sines, loc=self.locations, frags=self.frags)
 
     def get_queries_buffer(self, queries, layer_idx):
@@ -225,7 +289,7 @@ class AsyncReasoningCache(Cache):
     def get_att_buffer(self, r_queries, layer_idx):
         if layer_idx == 0:
             self.att_buffer = torch.empty((r_queries.size(1), r_queries.size(2), r_queries.size(3),
-                                           self.cache_structure[0][0].value_cache[layer_idx].size(3)),
+                                           _layer_values(self.cache_structure[0][0], layer_idx).size(3)),
                                           dtype=r_queries.dtype, device=r_queries.device)
         return self.att_buffer
 
@@ -261,12 +325,13 @@ class AsyncReasoningCache(Cache):
 
 
 def merge_caches(target: Cache, source: Cache, model):
-    locations = torch.full((1, source.get_seq_length()), target.get_seq_length(), dtype=torch.int32, device=source.key_cache[0].device)
-    cos, sin = model.rotary_emb(source.key_cache[0], locations)
-    for layer_id in range(len(target.key_cache)):
+    src_keys_0 = _layer_keys(source, 0)
+    locations = torch.full((1, source.get_seq_length()), target.get_seq_length(), dtype=torch.int32, device=src_keys_0.device)
+    cos, sin = model.rotary_emb(src_keys_0, locations)
+    for layer_id in range(_num_layers(target)):
         # re-rotate
-        key_states = apply_rotary_pos_emb(source.key_cache[layer_id], cos, sin)
-        target.update(key_states, source.value_cache[layer_id], layer_id)
+        key_states = apply_rotary_pos_emb(_layer_keys(source, layer_id), cos, sin)
+        target.update(key_states, _layer_values(source, layer_id), layer_id)
 
 
 #############################################################################
@@ -311,6 +376,11 @@ class AttentionModuleForQwen2(nn.Module):
             position_ids: Optional[torch.Tensor] = None,
             **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        # transformers >=5 renamed the kwarg from past_key_value (singular) to past_key_values
+        # (plural). Accept either; one of them is None depending on which version of
+        # transformers wrapped this forward.
+        if past_key_value is None:
+            past_key_value = kwargs.pop("past_key_values", None)
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -395,6 +465,9 @@ class AttentionModuleForQwen3(nn.Module):
             position_ids: Optional[torch.Tensor] = None,
             **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        # transformers >=5 renamed the kwarg to past_key_values (plural). Accept either.
+        if past_key_value is None:
+            past_key_value = kwargs.pop("past_key_values", None)
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -485,6 +558,9 @@ class AttentionModuleForQwen3Moe(nn.Module):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        # transformers >=5 renamed the kwarg to past_key_values (plural). Accept either.
+        if past_key_value is None:
+            past_key_value = kwargs.pop("past_key_values", None)
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
