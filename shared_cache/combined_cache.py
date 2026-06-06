@@ -11,6 +11,79 @@ from .cache_block import CacheBlock, using_rotary_cache
 logger = logging.getLogger(__name__)
 
 
+class _LinearStateView:
+    """List-like proxy that maps `cache_params.conv_states[layer_idx]` / `recurrent_states[layer_idx]`
+    onto per-block dicts stored on each worker's write target. On read, walks each worker's cache
+    chain backwards from the write target to find the most recent state, then stacks per-worker
+    states along the batch dim. On write, splits the model's output state along the batch dim and
+    stores each slice in the respective worker's write target.
+
+    Semantic caveat for parallel thinker+writer: the writer worker reads `writer_output`'s state,
+    which was captured at prefill time and does NOT see thinker tokens generated after the fork.
+    This matches the position-mask semantics that AsyncReasoning uses for full-attention layers
+    (writer's KV mask only sees thinker tokens up to its fork point), but it is a separate object
+    in storage from `thinker_output`'s evolving state.
+    """
+
+    def __init__(self, parent: "CombinedCacheView", state_attr: str):
+        self._parent = parent
+        self._state_attr = state_attr  # 'linear_conv_states' or 'linear_recurrent_states'
+
+    def _worker_chain(self, worker_idx: int) -> List[CacheBlock]:
+        return list(self._parent.cache_structure[worker_idx])
+
+    def _write_target(self, worker_idx: int) -> CacheBlock:
+        if self._parent.write_to is not None:
+            return self._parent.write_to[worker_idx]
+        return self._parent.cache_structure[worker_idx][-1]
+
+    def _per_worker_state(self, worker_idx: int, layer_idx: int) -> Optional[torch.Tensor]:
+        chain = self._worker_chain(worker_idx)
+        write_target = self._write_target(worker_idx)
+        # Look at the write target first; if empty, walk back through the chain.
+        candidates = [write_target] + [b for b in chain if b is not write_target][::-1]
+        for block in candidates:
+            state = getattr(block, self._state_attr).get(layer_idx)
+            if state is not None:
+                return state
+        return None
+
+    def __getitem__(self, layer_idx: int) -> Optional[torch.Tensor]:
+        num_workers = len(self._parent.cache_structure)
+        states = [self._per_worker_state(i, layer_idx) for i in range(num_workers)]
+        if all(s is None for s in states):
+            return None
+        # If some workers are missing a state but others have one, fall back to copying the
+        # first non-None state for them. This is the most common situation when a worker's
+        # chain hasn't been prefilled yet through a particular layer.
+        first_non_none = next(s for s in states if s is not None)
+        states = [s if s is not None else first_non_none for s in states]
+        if num_workers == 1:
+            return states[0]
+        # Each state was stored with batch=1 by a prior single-worker prefill or by an earlier
+        # multi-worker call's per-worker write. Stack them along dim 0 to give the model a
+        # batched [num_workers, ...] view.
+        return torch.cat(states, dim=0)
+
+    def __setitem__(self, layer_idx: int, tensor: torch.Tensor) -> None:
+        # Always clone — the tensor we receive is typically a view into ephemeral activations
+        # (e.g. F.pad with negative pad returns a view into mixed_qkv) whose underlying storage
+        # gets recycled after the forward pass returns. Caching the view silently corrupts the
+        # next prefill that allocates into the same memory.
+        num_workers = len(self._parent.cache_structure)
+        if num_workers == 1 or tensor.shape[0] == 1:
+            write_target = self._write_target(0)
+            getattr(write_target, self._state_attr)[layer_idx] = tensor.detach().clone()
+            return
+        assert tensor.shape[0] == num_workers, (
+            f"linear-attn state batch={tensor.shape[0]} doesn't match {num_workers=}"
+        )
+        per_worker = tensor.split(1, dim=0)
+        for worker_idx, slice_ in enumerate(per_worker):
+            write_target = self._write_target(worker_idx)
+            getattr(write_target, self._state_attr)[layer_idx] = slice_.detach().clone().contiguous()
+
+
 class CombinedCacheView(transformers.cache_utils.Cache):
     """
     A collection of multiple partially shared individual CacheBlock instances that combines them just-in-time.
@@ -42,9 +115,9 @@ class CombinedCacheView(transformers.cache_utils.Cache):
             override_length: Optional[int] = None,
             rotary_cache: Optional[dict] = None
     ):
-        # transformers >=4.55 requires Cache.__init__ to receive an explicit `layers` arg
-        # (empty list is fine) or `layer_class_to_replicate`. CombinedCacheView overrides
-        # update/get_seq_length itself, so we just pass empty layers to satisfy parent.
+        # transformers >=4.55 requires Cache.__init__ to get an explicit `layers` (empty list is fine) or
+        # `layer_class_to_replicate`. CombinedCacheView overrides update/get_seq_length itself, so we just
+        # pass an empty layers list to keep the parent's validation happy.
         try:
             super().__init__(layers=[])
         except TypeError:
@@ -129,14 +202,178 @@ class CombinedCacheView(transformers.cache_utils.Cache):
         return max(worker_cache_lengths)
 
     def get_mask_sizes(self, cache_position: torch.Tensor, layer_idx: int = 0) -> Tuple[int, int]:
-        """transformers >=4.55 calls this to size the causal mask. We return left-padded
-        keys/values of length max_length_per_worker (= override_length once set by
-        SharedCacheManager), starting at offset 0."""
+        """transformers >=4.55 calls this to size the causal mask. We always return left-padded keys/values of
+        length max_length_per_worker (= override_length once shared_cache_manager set it), starting at offset 0."""
         if self.override_length is not None:
             return self.override_length, 0
-        # Fallback: no shared_cache_manager configured override_length. The cache hasn't yet
-        # been written for the current step, so kv_length = current cached length + new query length.
+        # Fallback: no shared_cache_manager configured override_length. The cache hasn't yet been written
+        # for the current step, so kv_length = current cached length + new query length.
         return self.get_seq_length(layer_idx) + cache_position.shape[0], 0
+
+    # --- qwen3_5 hybrid-cache compatibility ---
+    # Qwen3_5GatedDeltaNet (linear-attention) layers bypass `.update()` and directly read/write
+    # `cache_params.conv_states[layer_idx]` / `cache_params.recurrent_states[layer_idx]`, and gate
+    # whether to use them on `cache_params.has_previous_state`. We expose those as views that read
+    # the prior state from the chain (looking back from the write target through the structure) and
+    # write the updated state to the write target.
+
+    @property
+    def conv_states(self) -> "_LinearStateView":
+        return _LinearStateView(self, "linear_conv_states")
+
+    @property
+    def recurrent_states(self) -> "_LinearStateView":
+        return _LinearStateView(self, "linear_recurrent_states")
+
+    @property
+    def has_previous_state(self) -> bool:
+        """True iff at least one block in the cache structure has a recurrent state captured from a
+        prior forward pass. Looks for either an explicit recurrent state (legacy storage) or a
+        captured GDN affine summary (the affine-cache path used by `qwen35_ar_patch`)."""
+        if not self.cache_structure:
+            return False
+        for chain in self.cache_structure:
+            for block in chain:
+                if block.linear_recurrent_states or block.linear_affine:
+                    return True
+        return False
+
+    def has_previous_affine(self, layer_idx: int) -> bool:
+        """Layer-specific version: True iff any block in any worker's chain has captured an
+        affine summary for this particular linear-attention layer. Used by the AR patch to decide
+        whether to thread an initial state into `chunk_gated_delta_rule`."""
+        for chain in self.cache_structure:
+            for block in chain:
+                if layer_idx in block.linear_affine:
+                    return True
+        return False
+
+    def compose_initial_recurrent_state(
+        self,
+        *,
+        layer_idx: int,
+        num_heads: int,
+        head_k_dim: int,
+        head_v_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        hf_convention: bool = True,
+    ) -> Optional[torch.Tensor]:
+        """For each worker, compose the GDN affine summaries along the worker's chain and apply
+        them to the zero state, then stack along the batch dim. This is the model's input
+        recurrent state for the upcoming forward.
+
+        Composition follows the algebra in `shared_cache/gdn_cache_block.py`:
+            (A_chain, B_chain) = compose all blocks' (A_block, B_block) in chain order
+            S_at_end = 0 @ A_chain + B_chain = B_chain (block convention)
+
+        Returns `None` if no block in any chain has a captured affine for this layer (i.e. nothing
+        to prefix the model's compute with). Otherwise returns a tensor of shape
+        `[num_workers, num_heads, head_k_dim, head_v_dim]` in HF convention (or transposed if
+        `hf_convention=False`).
+
+        Composition runs in fp32 because the underlying `torch.matmul` over 4D tensors used
+        by `update_affine_summary` / `compose_gdn_affines` only accepts fp32 on this kernel.
+        The fp32 storage of `linear_affine` lets us avoid a bf16<->fp32 cast on every read.
+        The single bf16 cast at the kernel boundary is unavoidable. (Single-worker forwards
+        bypass this entirely by using the kernel's bf16 stored output state — see the patch.)"""
+        from .gdn_cache_block import init_gdn_affine, compose_gdn_affines
+
+        if not self.has_previous_affine(layer_idx):
+            return None
+
+        per_worker_states: List[torch.Tensor] = []
+        for chain in self.cache_structure:
+            A_acc, B_acc = init_gdn_affine(
+                batch_size=1, num_heads=num_heads,
+                d_k=head_k_dim, d_v=head_v_dim,
+                dtype=torch.float32, device=device,
+            )
+            for block in chain:
+                pair = block.linear_affine.get(layer_idx)
+                if pair is None:
+                    continue
+                A_block, B_block = pair
+                # Stored affines are already fp32 (see capture_token_affines); .to(...) is a no-op.
+                A_acc, B_acc = compose_gdn_affines(
+                    A_first=A_acc, B_first=B_acc,
+                    A_second=A_block.to(dtype=torch.float32, device=device),
+                    B_second=B_block.to(dtype=torch.float32, device=device),
+                )
+            # S = 0 @ A_acc + B_acc = B_acc (in block convention)
+            per_worker_states.append(B_acc)
+
+        S_block = torch.cat(per_worker_states, dim=0)  # [num_workers, H, d_v, d_k], fp32
+        if hf_convention:
+            S_block = S_block.transpose(-1, -2).contiguous()  # [num_workers, H, d_k, d_v]
+        return S_block.to(dtype=dtype)
+
+    def capture_token_affines(
+        self,
+        *,
+        layer_idx: int,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        alpha: torch.Tensor,
+        beta: torch.Tensor,
+        l2norm_key: bool = True,
+        l2norm_eps: float = 1e-6,
+    ) -> None:
+        """Accumulate per-token GDN affine updates into each worker's write_target block.
+
+        The 4D matmul inside `update_affine_summary` only supports fp32 on this kernel,
+        so the math has to run in fp32. We cast the bf16 inputs up once on entry and
+        keep `linear_affine` stored in fp32 — that way subsequent reads (composition,
+        next update) don't pay a cast. The kernel-stored recurrent_state path (preferred
+        in single-worker mode by the patch) bypasses this entirely and stays bf16.
+
+        Shapes expected:
+            key:   [num_workers, seq_len, num_heads, head_k_dim]
+            value: [num_workers, seq_len, num_heads, head_v_dim]
+            alpha: [num_workers, seq_len, num_heads]   (post-exp gate)
+            beta:  [num_workers, seq_len, num_heads]
+        """
+        from .gdn_cache_block import init_gdn_affine, update_affine_summary
+
+        num_workers, seq_len, num_heads, head_k_dim = key.shape
+        head_v_dim = value.shape[-1]
+        assert num_workers == len(self.cache_structure)
+
+        # Single cast of all per-token tensors to fp32 (required by the matmul).
+        key_f = key.float()
+        if l2norm_key:
+            key_f = key_f * torch.rsqrt((key_f * key_f).sum(dim=-1, keepdim=True) + l2norm_eps)
+        value_f = value.float()
+        alpha_f = alpha.float()
+        beta_f = beta.float()
+
+        for worker_idx in range(num_workers):
+            target = (self.write_to[worker_idx] if self.write_to is not None
+                      else self.cache_structure[worker_idx][-1])
+            pair = target.linear_affine.get(layer_idx)
+            if pair is None:
+                A_hat, B_hat = init_gdn_affine(
+                    batch_size=1, num_heads=num_heads,
+                    d_k=head_k_dim, d_v=head_v_dim,
+                    dtype=torch.float32, device=key.device,
+                )
+            else:
+                A_hat, B_hat = pair
+                # Stored affines are already fp32; .to(...) is a no-op when so.
+                A_hat = A_hat.to(dtype=torch.float32, device=key.device)
+                B_hat = B_hat.to(dtype=torch.float32, device=key.device)
+
+            for t in range(seq_len):
+                k_t = key_f[worker_idx:worker_idx+1, t]    # [1, H, d_k]
+                v_t = value_f[worker_idx:worker_idx+1, t]  # [1, H, d_v]
+                a_t = alpha_f[worker_idx:worker_idx+1, t]  # [1, H]
+                b_t = beta_f[worker_idx:worker_idx+1, t]   # [1, H]
+                A_hat, B_hat = update_affine_summary(
+                    A_hat=A_hat, B_hat=B_hat,
+                    k=k_t, v=v_t, alpha=a_t, beta=b_t,
+                )
+
+            target.linear_affine[layer_idx] = (A_hat, B_hat)
 
     # v-- fixes https://huggingface.co/deepseek-ai/DeepSeek-R1/blob/56d4cbbb4d29f4355bab4b9a39ccb717a14ad5ad/modeling_deepseek.py#L1654
     def get_max_length(self, *args, **kwargs):
@@ -148,8 +385,8 @@ class CombinedCacheView(transformers.cache_utils.Cache):
     def get_usable_length(self, new_seq_length: int, layer_idx: Optional[int] = 0):
         if self.override_length is not None:
             return self.override_length - new_seq_length
-        # transformers >=4.55 removed Cache.get_usable_length; emulate the previous behaviour
-        # for dynamic-length caches (no max length => usable length is just the existing seq length).
+        # transformers >=4.55 removed Cache.get_usable_length; emulate the previous behaviour for
+        # dynamic-length caches (no max length => usable length is just the existing seq length).
         if hasattr(super(), "get_usable_length"):
             return super().get_usable_length(new_seq_length, layer_idx=layer_idx)
         return self.get_seq_length(layer_idx=layer_idx)

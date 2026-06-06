@@ -77,6 +77,17 @@ def main():
         args.model_name, torch_dtype='auto', device_map=args.device_map, low_cpu_mem_usage=True
     )
 
+    # Qwen3.5 (hybrid GDN/full-attention) needs the AR-friendly GDN forward patch and cannot
+    # use the fast CUDA kernels (which assume standard attention). Install the patch and force
+    # the slow kernel path automatically.
+    is_qwen35 = "qwen3.5" in args.model_name.lower() or getattr(model.config, "model_type", "") == "qwen3_5"
+    if is_qwen35 and args.mode == "async_reasoning":
+        from qwen35_gdn.qwen35_ar_patch import patch_qwen35_for_async_reasoning
+        patch_qwen35_for_async_reasoning(model)
+        if use_fast_kernel:
+            warnings.warn("Forcing use_fast_kernel=False because Qwen3.5 GDN layers don't support the fast CUDA kernels")
+            use_fast_kernel = False
+
     solver_kwargs = {}
     if args.mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver

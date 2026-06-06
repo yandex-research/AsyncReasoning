@@ -19,6 +19,8 @@ def prepare_model_for_inference(
     assert not kwargs, f"unrecognized {kwargs=}"
     if model.config.model_type == "qwen3":
         pass  # no conversion - compile later
+    elif model.config.model_type == "qwen3_5_text":
+        pass  # Qwen3.5 with linear attention (GDN), no conversion needed
     elif model.config.model_type == "qwen3_moe" and fuse_qwen3_moe_experts:
         warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused; full-model compile is disabled")
         use_torch_compile = False

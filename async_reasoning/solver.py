@@ -60,13 +60,46 @@ class AsyncReasoningSolver:
         next_inputs = self.tokenizer(prompting.mode_switching_question, **self.tokenizer_kwargs).to(self.device)
 
         logits = self.model(**cache.cm_mode_switching.get_input_kwargs(**next_inputs)).logits[..., -1, :]
-        probs = logits.softmax(-1)
-        yes_id = self.tokenizer(prompting.yes_token, **self.tokenizer_kwargs)["input_ids"].item()
-        no_id  = self.tokenizer(prompting.no_token, **self.tokenizer_kwargs)["input_ids"].item()
-        
-        should_continue_writing = (probs[..., yes_id] > probs[..., no_id]).item()
-        logger.debug(f'control: should continue writing? {should_continue_writing}')
+
+        # We compare the model's "yes" preference against its "no" preference. Two subtleties:
+        # (a) BPE tokenizers usually represent `yes`/`no` as distinct single-token variants
+        #     with and without a leading space. Depending on the surrounding text the model
+        #     may favour either. Sum over all single-token variants we can resolve.
+        # (b) Many models (e.g. Qwen3.5) put most of their mass on neither variant — they
+        #     want to keep writing prose. Comparing absolute softmax probabilities is
+        #     therefore noisy; instead, restrict to {yes-variants, no-variants} and compare
+        #     within that restricted set via logsumexp.
+        yes_ids, no_ids = self._yes_no_token_ids(prompting)
+        yes_score = torch.logsumexp(logits[..., yes_ids], dim=-1)
+        no_score = torch.logsumexp(logits[..., no_ids], dim=-1)
+        should_continue_writing = bool((yes_score > no_score).item())
+        logger.debug(
+            f"control: yes_score={float(yes_score):.3f}  no_score={float(no_score):.3f}  "
+            f"continue_writing={should_continue_writing}"
+        )
         return should_continue_writing
+
+    def _yes_no_token_ids(self, prompting: AsyncReasoningPrompting) -> tuple[list[int], list[int]]:
+        """Collect all single-token variants of yes/no the tokenizer can produce (with and
+        without a leading space, both casings). Cached on the instance."""
+        if getattr(self, "_yes_no_cache", None) is None:
+            yes_ids: list[int] = []
+            no_ids: list[int] = []
+            for yes_str, no_str in [
+                (prompting.yes_token,       prompting.no_token),
+                (" " + prompting.yes_token, " " + prompting.no_token),
+                (prompting.yes_token.capitalize(),       prompting.no_token.capitalize()),
+                (" " + prompting.yes_token.capitalize(), " " + prompting.no_token.capitalize()),
+            ]:
+                yi = self.tokenizer(yes_str, **self.tokenizer_kwargs)["input_ids"].flatten().tolist()
+                ni = self.tokenizer(no_str, **self.tokenizer_kwargs)["input_ids"].flatten().tolist()
+                if len(yi) == 1 and yi[0] not in yes_ids:
+                    yes_ids.append(yi[0])
+                if len(ni) == 1 and ni[0] not in no_ids:
+                    no_ids.append(ni[0])
+            assert yes_ids and no_ids, "tokenizer didn't produce single-token yes/no variants"
+            self._yes_no_cache = (yes_ids, no_ids)
+        return self._yes_no_cache
 
     def display_tokens(self,
         writer_output_tokens: Sequence[int], 
@@ -102,12 +135,19 @@ class AsyncReasoningSolver:
         writer_output_tokens = self.tokenizer.encode(prompting.writer_output_prefix, **self.tokenizer_kwargs).flatten().tolist()
         thinker_output_tokens = self.tokenizer.encode(prompting.thinker_output_prefix, **self.tokenizer_kwargs).flatten().tolist()
 
+        # Starter tokens — chosen so the model's first-step context exactly matches the
+        # corresponding Qwen chat template ending:
+        #   thinker context after starter = `<think>\n`     (= apply_chat_template(enable_thinking=True))
+        #   writer  context after starter = `</think>\n\n`  (= apply_chat_template(enable_thinking=False))
         writer_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
-        thinker_output_tokens.append(self.tokenizer.encode("\n\n", **self.tokenizer_kwargs).item())
+        thinker_output_tokens.append(self.tokenizer.encode("\n", **self.tokenizer_kwargs).item())
         eos_generated = False
+        # Start the timer BEFORE cache creation. The AR cache constructor does the multi-block
+        # prefill, which is analogous to a baseline solver's prompt prefill inside model.generate.
+        # Both must be included in TTFT so the comparison against baselines is fair.
+        starting_time = time.perf_counter()
         cache = self.Cache(self.model, self.tokenizer, prompting, tokenizer_kwargs=self.tokenizer_kwargs, starting_state=State.thinker_only)
         with torch.inference_mode():
-            starting_time = time.perf_counter()
             for step in range(budget):
                 if cache.state == State.thinker_only:
                     next_inputs = {"input_ids": torch.tensor([thinker_output_tokens[-1:]], device=self.device)}

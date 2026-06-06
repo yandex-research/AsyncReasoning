@@ -167,7 +167,27 @@ def assert_model_is_pristine(model: transformers.PreTrainedModel):
     elif isinstance(model.config, Qwen3Config):
         base_cls = Qwen3Attention
     else:
-        raise NotImplementedError
+        # Qwen3.5 (qwen3_5 / qwen3_5_text) has a hybrid GDN+full-attention stack with two
+        # distinct attention layer classes — check that neither got swapped out by AR's
+        # model_surgery (fast kernels) or another patch.
+        try:
+            from transformers.models.qwen3_5.modeling_qwen3_5 import (
+                Qwen3_5Attention as _Qwen35FullAttn,
+                Qwen3_5GatedDeltaNet as _Qwen35GDN,
+            )
+            allowed = (_Qwen35FullAttn, _Qwen35GDN)
+            for i, layer in enumerate(model.model.layers):
+                # The attention/linear-attn module name varies by layer type in Qwen3.5.
+                attn = getattr(layer, "self_attn", None) or getattr(layer, "linear_attn", None)
+                if attn is None or not isinstance(attn, allowed):
+                    raise AssertionError(
+                        f"Modified model. Layer {i}: expected one of {[c.__name__ for c in allowed]}, "
+                        f"got {None if attn is None else attn.__class__.__name__}"
+                    )
+            return
+        except ImportError:
+            pass
+        raise NotImplementedError(f"unsupported config: {type(model.config).__name__}")
 
     for i, layer in enumerate(model.model.layers):
         attn = layer.self_attn
