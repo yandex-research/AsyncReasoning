@@ -11,6 +11,19 @@ loses the state from previously-prefilled blocks. This patch fixes both:
 - conv: when prior conv_state is known, prepend its last `conv_kernel_size - 1` columns to
   `mixed_qkv` as left context, conv the joined sequence, then slice the new seq_len outputs.
 
+Both Qwen3.5 variants are supported by the same patch:
+
+- Dense Qwen3.5 (`transformers.models.qwen3_5.Qwen3_5GatedDeltaNet`)
+- MoE Qwen3.5 (`transformers.models.qwen3_5_moe.Qwen3_5MoeGatedDeltaNet`)
+
+The patch is class-agnostic: `_iter_gdn_modules` walks any submodule whose class name ends
+in `GatedDeltaNet` and which exposes `chunk_gated_delta_rule`. The MoE variant exposes the
+exact same `(in_proj_qkv, in_proj_z, in_proj_b, in_proj_a, conv1d, A_log, dt_bias, norm,
+out_proj, chunk_gated_delta_rule, recurrent_gated_delta_rule, causal_conv1d_update,
+causal_conv1d_fn, num_v_heads, head_k_dim, head_v_dim, conv_kernel_size, layer_idx,
+activation)` attribute set as the dense variant, so the same `_patched_forward` binds
+without changes.
+
 The patch is reversible via `unpatch()`. Apply with:
 
     patch = patch_qwen35_for_async_reasoning(model)

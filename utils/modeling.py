@@ -20,7 +20,14 @@ def prepare_model_for_inference(
     if model.config.model_type == "qwen3":
         pass  # no conversion - compile later
     elif model.config.model_type == "qwen3_5_text":
-        pass  # Qwen3.5 with linear attention (GDN), no conversion needed
+        pass  # Qwen3.5 dense with linear attention (GDN), no conversion needed
+    elif model.config.model_type == "qwen3_5_moe_text":
+        # Qwen3.5-MoE has the same hybrid GDN+full-attention stack as dense Qwen3.5,
+        # plus a sparse MoE block in place of the MLP. The AR-friendly GDN patch
+        # treats this identically to the dense path (patches the GDN layers, leaves
+        # the MoE MLP alone). No conversion needed; expert fusion / quantization for
+        # the MoE block can be revisited if needed but isn't required for correctness.
+        pass
     elif model.config.model_type == "qwen3_moe" and fuse_qwen3_moe_experts:
         warnings.warn("Converting qwen3_moe sparse MLP layers model to qwen3_moe_fused; full-model compile is disabled")
         use_torch_compile = False

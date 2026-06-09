@@ -156,9 +156,13 @@ def parse_until_valid_brace_sequence(text: str, start: int = 0, end: Optional[in
 
 
 def assert_model_is_pristine(model: transformers.PreTrainedModel):
+    """Verify no layer's attention module was swapped out by `model_surgery` (fast
+    kernels) or another patch. For models with a uniform attention class (Qwen2/Qwen3)
+    every layer must match a single base class. For hybrid models with a GDN +
+    full-attention stack (Qwen3.5 dense and MoE), every layer's `self_attn` or
+    `linear_attn` must match one of the two stock classes."""
     from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
     from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
-
     from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
     from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
 
@@ -167,31 +171,46 @@ def assert_model_is_pristine(model: transformers.PreTrainedModel):
     elif isinstance(model.config, Qwen3Config):
         base_cls = Qwen3Attention
     else:
-        # Qwen3.5 (qwen3_5 / qwen3_5_text) has a hybrid GDN+full-attention stack with two
-        # distinct attention layer classes — check that neither got swapped out by AR's
-        # model_surgery (fast kernels) or another patch.
+        # Try the hybrid GDN+full-attention path (Qwen3.5 dense or MoE). The expected
+        # pair of attention classes lives in different modules for dense vs MoE; we
+        # try each in turn. If neither matches, the config is unsupported.
+        hybrid_attention_classes: list[tuple[type, ...]] = []
         try:
             from transformers.models.qwen3_5.modeling_qwen3_5 import (
-                Qwen3_5Attention as _Qwen35FullAttn,
-                Qwen3_5GatedDeltaNet as _Qwen35GDN,
+                Qwen3_5Attention,
+                Qwen3_5GatedDeltaNet,
             )
-            allowed = (_Qwen35FullAttn, _Qwen35GDN)
-            for i, layer in enumerate(model.model.layers):
-                # The attention/linear-attn module name varies by layer type in Qwen3.5.
-                attn = getattr(layer, "self_attn", None) or getattr(layer, "linear_attn", None)
-                if attn is None or not isinstance(attn, allowed):
-                    raise AssertionError(
-                        f"Modified model. Layer {i}: expected one of {[c.__name__ for c in allowed]}, "
-                        f"got {None if attn is None else attn.__class__.__name__}"
-                    )
-            return
+            hybrid_attention_classes.append((Qwen3_5Attention, Qwen3_5GatedDeltaNet))
         except ImportError:
             pass
-        raise NotImplementedError(f"unsupported config: {type(model.config).__name__}")
+        try:
+            from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+                Qwen3_5MoeAttention,
+                Qwen3_5MoeGatedDeltaNet,
+            )
+            hybrid_attention_classes.append((Qwen3_5MoeAttention, Qwen3_5MoeGatedDeltaNet))
+        except ImportError:
+            pass
+
+        allowed: tuple[type, ...] = sum(hybrid_attention_classes, ())
+        if not allowed:
+            raise NotImplementedError(f"unsupported config: {type(model.config).__name__}")
+
+        for i, layer in enumerate(model.model.layers):
+            # `self_attn` for full-attention layers, `linear_attn` for GDN layers.
+            attn = getattr(layer, "self_attn", None) or getattr(layer, "linear_attn", None)
+            if attn is None or not isinstance(attn, allowed):
+                raise AssertionError(
+                    f"Modified model. Layer {i}: expected one of "
+                    f"{[c.__name__ for c in allowed]}, "
+                    f"got {None if attn is None else attn.__class__.__name__}"
+                )
+        return
 
     for i, layer in enumerate(model.model.layers):
         attn = layer.self_attn
         if not isinstance(attn, base_cls):
             raise AssertionError(
-                f"It seems like you use modified model. Layer {i}: expected {base_cls.__name__}, got {attn.__class__.__name__}"
+                f"It seems like you use modified model. Layer {i}: "
+                f"expected {base_cls.__name__}, got {attn.__class__.__name__}"
             )
