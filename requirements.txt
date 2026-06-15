@@ -8,6 +8,12 @@ transformers==5.2.0
 wandb>=0.17.2
 tqdm
 
+# Fast kernels for Qwen3.5 hybrid GDN+full-attention layers. Without these, HuggingFace's
+# Qwen3_5GatedDeltaNet falls back to a pure-torch reference of `chunk_gated_delta_rule`
+# which is ~3–5× slower per decode step (the "fast path is not available" warning).
+flash-linear-attention>=0.5.0
+causal-conv1d>=1.6.2
+
 # For eval
 latex2mathml==3.78.1
 

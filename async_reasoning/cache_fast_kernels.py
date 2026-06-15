@@ -21,12 +21,11 @@ class AsyncReasoningCacheFastKernels:
         # Init all needed cache blocks
         (
             self.input_prompt,
-            self.input_block,
             self.thinker_output,
             self.writer_output,
             self.mode_switching_prompt,
             self.mode_switching_question,
-        ) = (transformers.DynamicCache() for _ in range(6))
+        ) = (transformers.DynamicCache() for _ in range(5))
 
         def prefill_cache_block(text: str, blocks, write_to=None):
             write_to = blocks[-1] if write_to is None else write_to
@@ -35,34 +34,23 @@ class AsyncReasoningCacheFastKernels:
             with torch.inference_mode():
                 self.model(**tmp_cm.get_input_kwargs(encoded))
 
-        def init_empty_block(block: transformers.DynamicCache):
-            """Populate block with zero-length caches so it participates in structures without assertions."""
-            tmp_cm = HogwildCache(cache_structure=[[block]], write_to=[block], model=model)
-            dummy = self.tokenizer(" ", **self.tokenizer_kwargs)["input_ids"].to(self.device)
-            with torch.inference_mode():
-                self.model(**tmp_cm.get_input_kwargs(dummy))
-            for i in range(len(block.key_cache)):
-                block.key_cache[i] = block.key_cache[i][..., :0, :].contiguous()
-                block.value_cache[i] = block.value_cache[i][..., :0, :].contiguous()
-            block._seen_tokens = 0
-        
-        # encode each prompt section as LLM KV cache for use in generation
+        # encode each prompt section as LLM KV cache for use in generation. Async user-input
+        # insertions append directly onto `input_prompt` via `cm_input_only` (no separate block).
         prefill_cache_block(self.prompting.input_prompt, [self.input_prompt]) # <-- writes KV entries to last cache in list
-        init_empty_block(self.input_block)
-        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.input_block, self.thinker_output])
-        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.input_block, self.thinker_output, self.writer_output])
+        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.thinker_output])
+        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.thinker_output, self.writer_output])
         prefill_cache_block(self.prompting.mode_switching_prompt, [self.mode_switching_prompt])
 
-        thinker_view = (self.input_prompt, self.input_block, self.thinker_output)
-        writer_view = (self.input_prompt, self.input_block, self.thinker_output, self.writer_output)
-        mode_switching_view = (self.mode_switching_prompt, self.input_block, self.thinker_output, self.writer_output, self.mode_switching_question)
+        thinker_view = (self.input_prompt, self.thinker_output)
+        writer_view = (self.input_prompt, self.thinker_output, self.writer_output)
+        mode_switching_view = (self.mode_switching_prompt, self.thinker_output, self.writer_output, self.mode_switching_question)
 
         # prepare cache manager for each mode: only thinker, only writer and thinker+writer and mode switching
         self.cm_thinker_only = AsyncReasoningInferenceCache(cache_structure=[thinker_view], model=model)
         self.cm_writer_only = AsyncReasoningInferenceCache(cache_structure=[writer_view], model=model)
         self.cm_thinker_and_writer = AsyncReasoningInferenceCache(cache_structure=[thinker_view, writer_view], model=model)
         self.cm_mode_switching = AsyncReasoningInferenceCache(cache_structure=[mode_switching_view], model=model)
-        self.cm_input_only = AsyncReasoningInferenceCache(cache_structure=[[self.input_prompt, self.input_block]], write_to=[self.input_block], model=model)
+        self.cm_input_only = AsyncReasoningInferenceCache(cache_structure=[[self.input_prompt]], write_to=[self.input_prompt], model=model)
 
     # To catch and logg state change
     def __setattr__(self, name, value):

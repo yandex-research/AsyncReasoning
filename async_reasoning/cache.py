@@ -43,12 +43,11 @@ class AsyncReasoningCache:
         # Init all needed cache blocks.
         (
             self.input_prompt,
-            self.input_block,
             self.thinker_output,
             self.writer_output,
             self.mode_switching_prompt,
             self.mode_switching_question,
-        ) = (shared_cache.CacheBlock(config=self.model.config) for _ in range(6))
+        ) = (shared_cache.CacheBlock(config=self.model.config) for _ in range(5))
 
         def prefill_cache_block(text: str, blocks, write_to=None):
             write_to = blocks[-1] if write_to is None else write_to
@@ -57,30 +56,21 @@ class AsyncReasoningCache:
             with torch.inference_mode():
                 self.model(**tmp_cm.get_input_kwargs(encoded))
 
-        def init_empty_block(block: shared_cache.CacheBlock):
-            """Populate block with zero-length caches so it participates in structures without assertions."""
-            tmp_cm = shared_cache.SharedCacheManager(cache_structure=[[block]], write_to=[block])
-            dummy = self.tokenizer(" ", **self.tokenizer_kwargs)["input_ids"].to(self.device)
-            with torch.inference_mode():
-                self.model(**tmp_cm.get_input_kwargs(dummy))
-            block.trim_keep_first(0)
-
         # Encode each prompt section into its own KV cache block. Each prefill writes
         # its KV entries to the last block in the list; for chains that include earlier
         # blocks (e.g. thinker_output_prefix needs to see input_prompt), the chain is
-        # passed so RoPE positions are correct. input_block is reserved for async
-        # user-input insertions and starts empty.
+        # passed so RoPE positions are correct. Async user-input insertions append
+        # directly onto `input_prompt` via `cm_input_only` (no separate block).
         prefill_cache_block(self.prompting.input_prompt, [self.input_prompt])
-        init_empty_block(self.input_block)
-        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.input_block, self.thinker_output])
-        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.input_block, self.thinker_output, self.writer_output])
+        prefill_cache_block(self.prompting.thinker_output_prefix, [self.input_prompt, self.thinker_output])
+        prefill_cache_block(self.prompting.writer_output_prefix, [self.input_prompt, self.thinker_output, self.writer_output])
         prefill_cache_block(self.prompting.mode_switching_prompt, [self.mode_switching_prompt])
         # mode_switching_question is re-encoded on every check; no prefill here.
 
-        thinker_view = (self.input_prompt, self.input_block, self.thinker_output)
-        writer_view = (self.input_prompt, self.input_block, self.thinker_output, self.writer_output)
+        thinker_view = (self.input_prompt, self.thinker_output)
+        writer_view = (self.input_prompt, self.thinker_output, self.writer_output)
         mode_switching_view = (
-            self.mode_switching_prompt, self.input_block, self.thinker_output, self.writer_output, self.mode_switching_question,
+            self.mode_switching_prompt, self.thinker_output, self.writer_output, self.mode_switching_question,
         )
 
         # One cache manager per mode (thinker-only, writer-only, both, mode-switching).
@@ -88,7 +78,7 @@ class AsyncReasoningCache:
         self.cm_writer_only = shared_cache.SharedCacheManager(cache_structure=[writer_view])
         self.cm_thinker_and_writer = shared_cache.SharedCacheManager(cache_structure=[thinker_view, writer_view])
         self.cm_mode_switching = shared_cache.SharedCacheManager(cache_structure=[mode_switching_view])
-        self.cm_input_only = shared_cache.SharedCacheManager(cache_structure=[[self.input_prompt, self.input_block]], write_to=[self.input_block])
+        self.cm_input_only = shared_cache.SharedCacheManager(cache_structure=[[self.input_prompt]], write_to=[self.input_prompt])
 
     def __setattr__(self, name, value):
         # Log every state transition; useful for debugging mode-switching.
