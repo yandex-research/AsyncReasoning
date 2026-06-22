@@ -91,6 +91,23 @@ def main():
         args.model_name, torch_dtype='auto', device_map=device, low_cpu_mem_usage=True
     )
 
+    # Qwen3.5 (hybrid GDN+full-attention dense, and MoE variant) requires the GDN
+    # patch for AR mode — the AR cache machinery (per-layer affine capture, multi-block
+    # views) only works on the patched `_patched_forward`. Vanilla HF GDN does not
+    # understand `combined_cache_view`. The fast-kernel cache also doesn't support GDN,
+    # so this combination implicitly requires `--use-slow-kernel`.
+    _name_lower = args.model_name.lower()
+    _model_type = getattr(model.config, "model_type", "")
+    _has_gdn = (
+        "qwen3.5" in _name_lower
+        or _model_type in ("qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text")
+    )
+    if _has_gdn and args.mode == "async_reasoning":
+        from qwen35_gdn.qwen35_ar_patch import patch_qwen35_for_async_reasoning
+        patch_qwen35_for_async_reasoning(model)
+        n_gdn = sum(1 for t in model.config.layer_types if t == "linear_attention")
+        logger.info(f"Patched {n_gdn} GDN layers for Qwen3.5 hybrid model")
+
     solver_kwargs = {}
     if args.mode in ["async_reasoning"]:
         from async_reasoning.solver import AsyncReasoningSolver as Solver
