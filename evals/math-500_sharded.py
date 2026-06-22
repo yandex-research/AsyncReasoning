@@ -11,7 +11,7 @@ import transformers
 from tqdm import tqdm
 from datasets import load_dataset, load_from_disk
 
-from tts_evaluator import TTSEvaluator
+# from tts_evaluator import TTSEvaluator  # tortoise-tts dep disabled
 from utils.answer_processing import find_last_valid_expression, check_equality_judge, check_equality_local_model
 from utils.gpu_parallel import get_worker_rank, init_worker_logger
 from utils.task_queue import TaskQueue
@@ -139,7 +139,7 @@ def main():
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
-    evaluator = TTSEvaluator()
+    # evaluator = TTSEvaluator()  # tortoise-tts dep disabled
 
     def _solve_task_and_save(idx: int):
         save_path = f"{exp_dir_path}/sample_{idx}.json"
@@ -174,13 +174,14 @@ def main():
         else:
             is_equal = check_equality_judge(response, answer)
 
-        chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
-        metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
-        total_delay = metrics["total_delay"]
+        # tortoise-tts dep disabled — no TTS-based delay metric
+        # chunks = evaluator.get_chunks_with_tts(token_times[:-1] if eos_generated else token_times, k_chunks=5, return_audio=False)
+        # metrics = evaluator(**chunks, add_tts_in_parrallel=True, return_delays=False)
+        # total_delay = metrics["total_delay"]
         result = {
             "idx": idx,
             "is_equal": is_equal,
-            "metrics": metrics,
+            # "metrics": metrics,  # tortoise-tts dep disabled
             "token_times": token_times,
             "eos_generated": eos_generated,
             "response_answers": response,
@@ -191,7 +192,7 @@ def main():
         accuracy_numerator += int(is_equal)
         accuracy_denominator += 1
         current_accuracy = (accuracy_numerator / accuracy_denominator)
-        print(end=f'[{rank=}] {idx=}, {eos_generated=}, {is_equal=}, {total_delay=:.3f}\t| {current_accuracy=:.3f}', file=sys.stderr)
+        print(end=f'[{rank=}] {idx=}, {eos_generated=}, {is_equal=}\t| {current_accuracy=:.3f}', file=sys.stderr)
         with open(save_path, "w") as f:
             json.dump(result, f, indent=2)
         if "NV_YT_OPERATION_ID" in os.environ and rank == 0 and (
