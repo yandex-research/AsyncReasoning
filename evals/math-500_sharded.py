@@ -43,8 +43,10 @@ def parse_args():
         "--mode",
         type=str,
         required=True,
-        choices=["async_reasoning", "baseline_think", "baseline_no_think"],
-        help="Select reasoning mode",
+        choices=["async_reasoning", "async_inputs", "baseline_think", "baseline_no_think"],
+        help="Select reasoning mode. async_inputs: single-cache decode, no thinker/writer "
+             "fork; shard_2 is spliced into the cache via async_kv_insert at "
+             "next_shard_every_steps decoded tokens (target must be 'input').",
     )
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-32B", help="Model name from hf")
     parser.add_argument("--budget", type=int, default=16384, help="Budget to eval on")
@@ -109,7 +111,7 @@ def main():
         logger.info(f"Patched {n_gdn} GDN layers for Qwen3.5 hybrid model")
 
     solver_kwargs = {}
-    if args.mode in ["async_reasoning"]:
+    if args.mode == "async_reasoning":
         from async_reasoning.solver import AsyncReasoningSolver as Solver
         from async_reasoning.async_input_hook import async_input_hook_constructor
 
@@ -123,27 +125,102 @@ def main():
             "use_fast_kernel": use_fast_kernel,
             "end_of_think_token_ix": end_of_think_token_ix,
         })
+        solver = Solver(model, tokenizer, **solver_kwargs)
+    elif args.mode == "async_inputs":
+        # Single linear cache, no thinker/writer fork, no AR machinery. Async user
+        # input gets spliced into the cache via the async_kv_insert kernel at the
+        # decode-step count given by --next_shard_every_steps. Only shard_to_target
+        # == ['input'] is meaningful here.
+        assert args.shard_to_target is None or args.shard_to_target == ["input"], \
+            "async_inputs supports only --shard_to_target input (or omit)"
+        from async_reasoning.async_kv_insert import insert_async_input  # noqa: F401
+        solver = None  # raw decode path below
     elif args.mode in ["baseline_think", "baseline_no_think"]:
-        assert args.next_shard_every_steps is None, "async_input mode does not work in baselines."
-        assert args.shard_to_target is None, "async_input mode does not work in baselines."
-        assert args.shard_wait_step is [], "async_input mode does not work in baselines."
+        assert args.next_shard_every_steps is None, "shard timing is only for async modes."
+        assert args.shard_to_target is None, "shard target is only for async modes."
+        assert args.shard_wait_step is [], "shard wait is only for async modes."
         from evals.baseline_solver import BaselineSolver as Solver
         solver_kwargs.update({
             "thinker_enabled": (args.mode == "baseline_think"),
         })
+        solver = Solver(model, tokenizer, **solver_kwargs)
     else:
         raise ValueError("unsupported mode")
-
-    solver = Solver(model, tokenizer, **solver_kwargs)
     dataset_math = load_from_disk(args.dataset_path)
     accuracy_numerator = accuracy_denominator = 0
     exp_dir_path = f"{args.path_to_results}/math-500_sharded_{args.next_shard_every_steps}_steps/{args.mode}"
     os.makedirs(exp_dir_path, exist_ok=True)
     # evaluator = TTSEvaluator()  # tortoise-tts dep disabled
 
+    def _solve_async_inputs(problem, shard_2_text):
+        """Single-cache decode with mid-stream KV insertion. Returns the same
+        (writer_str, thinker_str, token_times, eos) shape as the AR solver does
+        so the downstream judging/result-saving code is identical.
+
+        Trigger semantics — when --next_shard_every_steps == 0, both shards are
+        already concatenated in `instruction` (handled by caller), and no insertion
+        happens. When > 0, shard_2 is spliced at that many decoded tokens (or just
+        after a "\\n\\n" boundary, if --shard_wait_step is set). When < 0, no
+        insertion at all.
+        """
+        from async_reasoning.async_kv_insert import insert_async_input
+        import time as _time
+
+        device = next(model.parameters()).device
+        eos_id = tokenizer.eos_token_id
+
+        # Prefill the prompt.
+        ids = tokenizer(problem, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
+        with torch.inference_mode():
+            out = model(input_ids=ids, use_cache=True)
+        cache = out.past_key_values
+        next_token = out.logits[:, -1, :].argmax(-1, keepdim=True)
+
+        # Pre-tokenize shard_2 once (with the same framing the async hook uses).
+        do_insert = args.next_shard_every_steps is not None and args.next_shard_every_steps > 0
+        if do_insert:
+            shard2_text_wrapped = f"\n\nADDITIONAL USER INPUT: {shard_2_text}\n\n"
+            shard2_ids = tokenizer(shard2_text_wrapped, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
+        inserted = False
+
+        writer_chars = ""
+        token_times = []
+        t0 = _time.time()
+        eos_generated = False
+
+        with torch.inference_mode():
+            for step in range(args.budget):
+                tok_str = tokenizer.decode([int(next_token.item())], skip_special_tokens=False)
+                t_now = _time.time() - t0
+                token_times.append((tok_str, t_now, len(writer_chars)))
+                writer_chars += tok_str
+
+                if int(next_token.item()) == eos_id:
+                    eos_generated = True
+                    break
+
+                # Decide whether to splice shard_2 in BEFORE the next forward.
+                if do_insert and not inserted and (step + 1) >= args.next_shard_every_steps:
+                    boundary_ok = (not args.shard_wait_step) or writer_chars.endswith("\n\n")
+                    if boundary_ok:
+                        cache = insert_async_input(model, cache, shard2_ids, position=cache.get_seq_length())
+                        inserted = True
+
+                cache_pos = torch.tensor([cache.get_seq_length()], device=device)
+                out = model(
+                    input_ids=next_token,
+                    past_key_values=cache,
+                    cache_position=cache_pos,
+                    use_cache=True,
+                )
+                cache = out.past_key_values
+                next_token = out.logits[:, -1, :].argmax(-1, keepdim=True)
+
+        return writer_chars, "", token_times, eos_generated
+
     def _solve_task_and_save(idx: int):
         save_path = f"{exp_dir_path}/sample_{idx}.json"
-        if os.path.exists(save_path):  
+        if os.path.exists(save_path):
             return  # already solved by previous run and saved in snapshot
 
         nonlocal accuracy_numerator, accuracy_denominator
@@ -153,19 +230,26 @@ def main():
         instruction = "".join(problem_shards) if args.next_shard_every_steps == 0 else problem_shards[0]
         problem = f"Please reason step by step, and put your final answer within \\boxed{{}}.\n\n{instruction}"
 
-        writer_output_str, thinker_output_str, token_times, eos_generated = \
-            solver.solve(
-                problem, 
-                budget=args.budget,  
-                on_new_tokens_generated=async_input_hook_constructor(
-                    solver,
-                    args.shard_to_target,
-                    args.target_reminders,
-                    args.next_shard_every_steps,
-                    problem_shards[1],
-                    args.shard_wait_step,
+        if args.mode == "async_inputs":
+            writer_output_str, thinker_output_str, token_times, eos_generated = \
+                _solve_async_inputs(problem, problem_shards[1])
+        elif args.mode == "async_reasoning":
+            writer_output_str, thinker_output_str, token_times, eos_generated = \
+                solver.solve(
+                    problem,
+                    budget=args.budget,
+                    on_new_tokens_generated=async_input_hook_constructor(
+                        solver,
+                        args.shard_to_target,
+                        args.target_reminders,
+                        args.next_shard_every_steps,
+                        problem_shards[1],
+                        args.shard_wait_step,
+                    )
                 )
-            )
+        else:  # baseline_think / baseline_no_think
+            writer_output_str, thinker_output_str, token_times, eos_generated = \
+                solver.solve(problem, budget=args.budget)
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0
 
