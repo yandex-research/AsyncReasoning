@@ -62,9 +62,11 @@ def parse_args():
     parser.add_argument(
         "--shard_to_target",
         nargs="+",
-        choices=["thinker", "writer", "input"],
+        choices=["thinker", "writer", "input", "output"],
         default=None,
-        help='Where to share live context. Use: --shard_to_target input | thinker | writer',
+        help='Where to share live context. async_reasoning supports input | thinker | writer; '
+             'async_inputs supports input | output (or both, e.g. --shard_to_target input output, '
+             'inserting shard_2 in BOTH places simultaneously).',
     )
     parser.add_argument(
         "--target_reminders",
@@ -131,10 +133,13 @@ def main():
     elif args.mode == "async_inputs":
         # Single linear cache, no thinker/writer fork, no AR machinery. Async user
         # input gets spliced into the cache via the async_kv_insert kernel at the
-        # decode-step count given by --next_shard_every_steps. Only shard_to_target
-        # == ['input'] is meaningful here.
-        assert args.shard_to_target is None or args.shard_to_target == ["input"], \
-            "async_inputs supports only --shard_to_target input (or omit)"
+        # decode-step count given by --next_shard_every_steps. Two targets are
+        # supported: "input" (splice at end of original prompt; suffix RoPE-shifted)
+        # and "output" (append at current end of cache; degenerate insertion). Both
+        # may be combined: shard_2 ends up duplicated in both places.
+        _async_in_targets = set(args.shard_to_target or ["input"])
+        assert _async_in_targets.issubset({"input", "output"}), \
+            "async_inputs supports --shard_to_target chosen from {input, output} only"
         # async_inputs is a throughput-oriented mode: refuse to run if the GDN fast
         # path is missing on a Qwen3.5 hybrid model. Falling back to the torch
         # reference of chunk_gated_delta_rule would silently make the eval ~3-5×
@@ -196,6 +201,12 @@ def main():
         eos_id = tokenizer.eos_token_id
         pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
         B = len(batch_indices)
+        # Targets for shard insertion. "input" splices at end of prompt and shifts the
+        # decoded suffix by +M (the kernel does the RoPE shift). "output" appends at the
+        # current end of cache (degenerate kernel call — empty suffix). Both can be on.
+        async_in_targets = set(args.shard_to_target or ["input"])
+        do_insert_input = "input" in async_in_targets
+        do_insert_output = "output" in async_in_targets
 
         # Build per-sample inputs
         samples = [dataset_math[i] for i in batch_indices]
@@ -269,23 +280,32 @@ def main():
                     if all(eos_state):
                         break
 
-                    # Insert shard_2 BEFORE the next forward — at end of the INPUT block,
-                    # not at end of the cache. The kernel RoPE-shifts the suffix (= decoded
-                    # tokens so far) by +M so they keep their relative position.
+                    # Insert shard_2 BEFORE the next forward. Two possible splice points:
+                    #   * "input"  → at end of the original prompt; the kernel RoPE-shifts
+                    #                the decoded suffix by +M so it keeps its relative
+                    #                position.
+                    #   * "output" → at the current end of cache; degenerate kernel call
+                    #                (empty suffix), effectively appends shard_2 after the
+                    #                decoded tokens so far.
+                    # Both can run on the same step; shard_2 then appears twice in the
+                    # cache (once inside the input block, once at the output end).
                     if do_insert and not inserted and (step + 1) >= args.next_shard_every_steps:
                         # Boundary check — for batched run, ALL alive samples must end in \n\n.
                         boundary_ok = (not args.shard_wait_step) or all(
                             writer_chars[b].endswith("\n\n") for b in range(B) if not eos_state[b]
                         )
                         if boundary_ok:
-                            cache = insert_async_input(model, cache, shard2_batch, position=prompt_cache_len)
-                            # attn_mask: splice M ones at the right of the prompt block.
                             shard2_attn = torch.ones(B, M, dtype=torch.long, device=device)
-                            attn_mask = torch.cat([
-                                attn_mask[:, :prompt_cache_len],
-                                shard2_attn,
-                                attn_mask[:, prompt_cache_len:],
-                            ], dim=1)
+                            if do_insert_input:
+                                cache = insert_async_input(model, cache, shard2_batch, position=prompt_cache_len)
+                                attn_mask = torch.cat([
+                                    attn_mask[:, :prompt_cache_len],
+                                    shard2_attn,
+                                    attn_mask[:, prompt_cache_len:],
+                                ], dim=1)
+                            if do_insert_output:
+                                cache = insert_async_input(model, cache, shard2_batch, position=cache.get_seq_length())
+                                attn_mask = torch.cat([attn_mask, shard2_attn], dim=1)
                             inserted = True
 
                     cache_pos = torch.tensor([cache.get_seq_length()], device=device)
