@@ -290,10 +290,23 @@ def main():
                     # Both can run on the same step; shard_2 then appears twice in the
                     # cache (once inside the input block, once at the output end).
                     if do_insert and not inserted and (step + 1) >= args.next_shard_every_steps:
-                        # Boundary check — for batched run, ALL alive samples must end in \n\n.
-                        boundary_ok = (not args.shard_wait_step) or all(
-                            writer_chars[b].endswith("\n\n") for b in range(B) if not eos_state[b]
-                        )
+                        # Boundary check. The insertion is one cache surgery applied to the whole
+                        # batch — all samples splice at the same cache position — so requiring
+                        # *every* alive sample to be at a "\n\n" boundary at the exact same step
+                        # has probability ~0 at B>1 and means insertion never fires. Instead, fire
+                        # when ANY alive sample has hit a boundary, OR after a small grace window
+                        # past `next_shard_every_steps` (so a contrarian sample can't deadlock the
+                        # whole batch). At B=1 this degenerates to "wait for the only sample's
+                        # next \n\n".
+                        if args.shard_wait_step:
+                            any_boundary = any(
+                                writer_chars[b].endswith("\n\n")
+                                for b in range(B) if not eos_state[b]
+                            )
+                            grace_exceeded = (step + 1) >= args.next_shard_every_steps + 32
+                            boundary_ok = any_boundary or grace_exceeded
+                        else:
+                            boundary_ok = True
                         if boundary_ok:
                             shard2_attn = torch.ones(B, M, dtype=torch.long, device=device)
                             if do_insert_input:
@@ -338,19 +351,20 @@ def main():
 
     def _judge_and_save(idx: int, writer_output_str: str, thinker_output_str: str,
                         token_times, eos_generated: bool):
+        """Save the per-sample result FIRST (with is_equal=None), then attempt to
+        judge. A judge failure (OOM, missing API key, network error) leaves the
+        saved JSON with is_equal=None — re-runnable offline — and DOES NOT lose the
+        decode output. Decode-time OOMs are handled separately by the caller."""
         nonlocal accuracy_numerator, accuracy_denominator
         save_path = f"{exp_dir_path}/sample_{idx}.json"
         problem_shards = dataset_math[idx]['problem_shards']
         answer = str(dataset_math[idx]['answer'])
         response = find_last_valid_expression(writer_output_str, extract_result=lambda x: x[7:-1])
         assert len(token_times) > 0, f"empty token_times for idx={idx}"
-        if args.use_local_judge:
-            is_equal = check_equality_local_model(model, tokenizer, response, answer)
-        else:
-            is_equal = check_equality_judge(response, answer)
+        # 1. Save first with is_equal=None so the response is never lost.
         result = {
             "idx": idx,
-            "is_equal": is_equal,
+            "is_equal": None,
             "token_times": token_times,
             "eos_generated": eos_generated,
             "response_answers": response,
@@ -358,13 +372,33 @@ def main():
             "writer_response": writer_output_str,
             "thinker_response": thinker_output_str,
         }
-        accuracy_numerator += int(bool(is_equal))
-        accuracy_denominator += 1
-        current_accuracy = (accuracy_numerator / accuracy_denominator)
-        print(end=f'[{rank=}] {idx=}, {eos_generated=}, {is_equal=}\t| {current_accuracy=:.3f}',
-              file=sys.stderr)
         with open(save_path, "w") as f:
             json.dump(result, f, indent=2)
+        # 2. Try to judge. Any failure (CUDA OOM, missing OPENAI key, etc.) is logged
+        #    but does NOT remove the saved result — judge offline later.
+        is_equal = None
+        try:
+            if args.use_local_judge:
+                is_equal = check_equality_local_model(model, tokenizer, response, answer)
+            else:
+                is_equal = check_equality_judge(response, answer)
+        except torch.cuda.OutOfMemoryError as e:
+            torch.cuda.empty_cache()
+            logger.warning(f"judge OOM on idx={idx}: {str(e)[:80]} — leaving is_equal=None")
+        except Exception as e:
+            logger.warning(f"judge failed on idx={idx}: {type(e).__name__}: {str(e)[:80]} — leaving is_equal=None")
+        if is_equal is not None:
+            result["is_equal"] = bool(is_equal)
+            with open(save_path, "w") as f:
+                json.dump(result, f, indent=2)
+            accuracy_numerator += int(bool(is_equal))
+            accuracy_denominator += 1
+            current_accuracy = (accuracy_numerator / accuracy_denominator)
+            print(end=f'[{rank=}] {idx=}, {eos_generated=}, {is_equal=}\t| {current_accuracy=:.3f}',
+                  file=sys.stderr)
+        else:
+            print(end=f'[{rank=}] {idx=}, {eos_generated=}, is_equal=None (judge unavailable)',
+                  file=sys.stderr)
         if "NV_YT_OPERATION_ID" in os.environ and rank == 0 and (
                 accuracy_denominator % args.dump_snapshot_freq == args.dump_snapshot_freq - 1):
             nirvana_dl.snapshot.dump_snapshot()
@@ -419,18 +453,21 @@ def main():
                 return list(live)
             logger.error(f"OOM on retry at B=1 — giving up on {live}")
             return list(live)
-        for idx, (writer, thinker, ttimes, eos) in zip(live, results):
-            try:
+        # _judge_and_save now writes the sample even when the judge fails, so we just
+        # call it per sample. Any leftover OOM at the post-decode stage (rare) is
+        # treated as a decode-side failure and deferred.
+        try:
+            for idx, (writer, thinker, ttimes, eos) in zip(live, results):
                 _judge_and_save(idx, writer, thinker, ttimes, eos)
-            except torch.cuda.OutOfMemoryError:
-                # Judge OOM'd — defer the whole sample so it's retried.
-                torch.cuda.empty_cache()
-                if allow_retry:
-                    logger.warning(f"OOM in judge on idx={idx} — deferring")
-                    return [idx] + [j for j in live[live.index(idx) + 1:]
-                                    if not os.path.exists(f"{exp_dir_path}/sample_{j}.json")]
-                logger.error(f"OOM in judge retry on idx={idx} — giving up")
-                return [idx]
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            unsaved = [j for j in live if not os.path.exists(f"{exp_dir_path}/sample_{j}.json")]
+            if allow_retry and unsaved:
+                logger.warning(f"OOM during save loop — deferring {unsaved}")
+                return unsaved
+            if unsaved:
+                logger.error(f"OOM during save loop on retry — giving up on {unsaved}")
+            return unsaved
         return []
 
     # --- iteration ---
