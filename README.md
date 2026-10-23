@@ -86,6 +86,10 @@ python -c "import os, sys, json; fs=[fn for fn in os.listdir('.') if fn.endswith
 
 TBU
 
+## Asynchronous Reasoning with Additional Inputs
+
+We used two datasets to evaluate AsyncReasoning with incoming user inputs: our [math_500_sharded dataset](https://huggingface.co/datasets/MrDarkTesla/math_500_sharded) and the [lost_in_conversation dataset](https://huggingface.co/datasets/microsoft/lost_in_conversation). Evaluation code is available in separate branches: [math_sharded](https://github.com/yandex-research/AsyncReasoning/blob/async_input_runner/evals/math-500_sharded.py) and [lost_in_conversation](https://github.com/yandex-research/AsyncReasoning/blob/async_input_multishard/evals/llms_get_lost.py), respectively.
+
 ## The contents of the `./tortoise` Folder
 
 The code contained in the `./tortoise` directory is **not authored by this project’s maintainers**. It is a replica of the open-source [[Tortoise TTS](https://github.com/neonbjb/tortoise-tts)](https://github.com/neonbjb/tortoise-tts) project by **neonbjb**, which is licensed under the [[Apache License 2.0](https://github.com/neonbjb/tortoise-tts/blob/main/LICENSE)](https://github.com/neonbjb/tortoise-tts/blob/main/LICENSE). See [(Betker et al, 2023)](https://arxiv.org/abs/2305.07243) for their technical report.
